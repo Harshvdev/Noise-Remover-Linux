@@ -1,0 +1,13 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+audio-core.workspace = true
+recorder.workspace = true
+playback.workspace = true
+eframe.workspace = true
+egui.workspace = true
+log.workspace = true
+env_logger.workspace = true

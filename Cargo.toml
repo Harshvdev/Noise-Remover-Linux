@@ -1,0 +1,25 @@
+[workspace]
+members = [
+    "crates/audio-core",
+    "crates/recorder",
+    "crates/playback",
+    "crates/app",
+]
+resolver = "2"
+
+[workspace.dependencies]
+audio-core = { path = "crates/audio-core" }
+recorder = { path = "crates/recorder" }
+playback = { path = "crates/playback" }
+
+cpal = "0.18"
+ringbuf = "0.4"
+hound = "3.5"
+rubato = "0.16"
+rustfft = "6.2"
+realfft = "3.3"
+eframe = "0.31"
+egui = "0.31"
+thiserror = "2.0"
+log = "0.4"
+env_logger = "0.11"

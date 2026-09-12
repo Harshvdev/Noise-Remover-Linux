@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+recordings/*.wav
+!recordings/.gitkeep
+models/*.onnx
+!models/.gitkeep

@@ -1,0 +1,12 @@
+[package]
+name = "playback"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+audio-core.workspace = true
+cpal.workspace = true
+ringbuf.workspace = true
+hound.workspace = true
+thiserror.workspace = true
+log.workspace = true
