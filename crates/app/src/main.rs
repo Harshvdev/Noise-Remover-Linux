@@ -3,7 +3,10 @@
 mod waveform;
 
 use std::path::PathBuf;
-use dsp::{NoiseAnalyzer, NoiseProfile, SignalAnalysisReport};
+use dsp::{
+    DspConfig, DspProcessingReport, DspProcessor, NoiseAnalyzer, NoiseProfile,
+    SignalAnalysisReport,
+};
 use eframe::egui::{self, Color32, ProgressBar, RichText};
 use playback::AudioPlayer;
 use recorder::{AudioRecorder, RecorderMode};
@@ -13,6 +16,8 @@ use waveform::WaveformRenderer;
 enum AudioTab {
     Original,
     NoiseReference,
+    DspCleaned,
+    RemovedNoise,
 }
 
 struct NoiseRemoverApp {
@@ -22,6 +27,8 @@ struct NoiseRemoverApp {
     analyzer: Option<NoiseAnalyzer>,
     noise_profile: Option<NoiseProfile>,
     signal_report: Option<SignalAnalysisReport>,
+    dsp_processor: Option<DspProcessor>,
+    dsp_report: Option<DspProcessingReport>,
     devices: Vec<(usize, String)>,
     selected_device_idx: usize,
     active_tab: AudioTab,
@@ -74,6 +81,8 @@ impl NoiseRemoverApp {
             analyzer: NoiseAnalyzer::new(48000).ok(),
             noise_profile: None,
             signal_report: None,
+            dsp_processor: DspProcessor::new(48000).ok(),
+            dsp_report: None,
             devices,
             selected_device_idx: selected_idx,
             active_tab: AudioTab::Original,
@@ -130,10 +139,100 @@ impl NoiseRemoverApp {
         }
     }
 
+    fn dsp_cleaned_path(&self) -> PathBuf {
+        PathBuf::from("recordings/dsp_cleaned.wav")
+    }
+
+    fn removed_noise_path(&self) -> PathBuf {
+        PathBuf::from("recordings/removed_noise.wav")
+    }
+
+    fn run_dsp_cleaning(&mut self) {
+        let profile = match self.noise_profile.as_ref() {
+            Some(p) => p,
+            None => {
+                self.status_message = "Please calibrate noise reference first.".into();
+                return;
+            }
+        };
+
+        let rec_path = match self.recorder.last_recording_path() {
+            Some(p) if p.exists() => p,
+            _ => {
+                self.status_message = "No voice recording found. Record voice first!".into();
+                return;
+            }
+        };
+
+        let (samples, _) = match audio_core::read_wav_canonical_f32(&rec_path) {
+            Ok(s) => s,
+            Err(e) => {
+                self.status_message = format!("Failed to read recording: {}", e);
+                return;
+            }
+        };
+
+        let processor = match self.dsp_processor.as_ref() {
+            Some(p) => p,
+            None => {
+                self.status_message = "DSP processor not initialized.".into();
+                return;
+            }
+        };
+
+        let config = DspConfig::default();
+        let activity = self.signal_report.as_ref().map(|r| &r.activity);
+
+        match processor.process(&samples, profile, activity, &config) {
+            Ok(result) => {
+                let cleaned_path = self.dsp_cleaned_path();
+                let noise_path = self.removed_noise_path();
+
+                if let Err(e) =
+                    audio_core::write_wav_f32(&cleaned_path, &result.cleaned_samples, 48000, 1)
+                {
+                    self.status_message = format!("Failed to write dsp_cleaned.wav: {}", e);
+                    return;
+                }
+
+                if let Err(e) =
+                    audio_core::write_wav_f32(&noise_path, &result.removed_noise_samples, 48000, 1)
+                {
+                    self.status_message = format!("Failed to write removed_noise.wav: {}", e);
+                    return;
+                }
+
+                let att = result.report.attenuation_db;
+                let ms = result.report.processing_time_ms;
+                let notches = result.report.notched_frequencies.clone();
+                self.dsp_report = Some(result.report);
+                self.active_tab = AudioTab::DspCleaned;
+                self.reload_active_audio();
+
+                let notch_msg = if notches.is_empty() {
+                    String::new()
+                } else {
+                    let freqs_str: Vec<String> =
+                        notches.iter().map(|f| format!("{:.1} Hz", f)).collect();
+                    format!(" (Hum notched: {})", freqs_str.join(", "))
+                };
+                self.status_message = format!(
+                    "DSP cleaning complete: {:.1} dB noise reduction in {:.0} ms!{}",
+                    att, ms, notch_msg
+                );
+            }
+            Err(e) => {
+                self.status_message = format!("DSP processing failed: {}", e);
+            }
+        }
+    }
+
     fn reload_active_audio(&mut self) {
         let path = match self.active_tab {
             AudioTab::Original => self.recorder.last_recording_path(),
             AudioTab::NoiseReference => self.recorder.last_calibration_path(),
+            AudioTab::DspCleaned => Some(self.dsp_cleaned_path()),
+            AudioTab::RemovedNoise => Some(self.removed_noise_path()),
         };
 
         if let Some(p) = path {
@@ -392,6 +491,33 @@ impl eframe::App for NoiseRemoverApp {
                         }
                     }
 
+                    // 3. DSP Noise Removal Button
+                    let can_clean = !is_recording
+                        && !is_calibrating
+                        && !status.is_saving
+                        && self.noise_profile.is_some()
+                        && self
+                            .recorder
+                            .last_recording_path()
+                            .map(|p| p.exists())
+                            .unwrap_or(false);
+
+                    let clean_btn = ui.add_enabled(
+                        can_clean,
+                        egui::Button::new(
+                            RichText::new("⚡ 3. Clean Noise (DSP)")
+                                .size(15.0)
+                                .color(if can_clean {
+                                    Color32::from_rgb(52, 211, 153)
+                                } else {
+                                    Color32::from_rgb(100, 116, 139)
+                                }),
+                        ),
+                    );
+                    if clean_btn.clicked() {
+                        self.run_dsp_cleaning();
+                    }
+
                     // Time display or Saving status
                     if status.is_saving {
                         ui.spinner();
@@ -442,6 +568,20 @@ impl eframe::App for NoiseRemoverApp {
                         AudioTab::NoiseReference,
                         "Noise Reference",
                     );
+                    if self.dsp_cleaned_path().exists() {
+                        ui.selectable_value(
+                            &mut self.active_tab,
+                            AudioTab::DspCleaned,
+                            "✨ DSP Cleaned",
+                        );
+                    }
+                    if self.removed_noise_path().exists() {
+                        ui.selectable_value(
+                            &mut self.active_tab,
+                            AudioTab::RemovedNoise,
+                            "🗑 Removed Noise",
+                        );
+                    }
 
                     if self.active_tab != prev_tab {
                         self.reload_active_audio();
@@ -554,6 +694,24 @@ impl eframe::App for NoiseRemoverApp {
                     ui.label(format!("• Vocal-Band SNR: {:.1} dB", sig.activity.vocal_snr_db));
                     ui.label(format!("• Active Speech Frame Ratio: {:.1}%", sig.activity.active_frame_ratio * 100.0));
                     ui.label(format!("• Recording RMS: {:.1} dBFS (Peak: {:.1} dBFS)", sig.rms_dbfs, sig.peak_dbfs));
+                }
+
+                if let Some(ref report) = self.dsp_report {
+                    ui.add_space(4.0);
+                    ui.separator();
+                    ui.label(RichText::new("DSP Cleaning Results (Phase 4):").strong().color(Color32::from_rgb(52, 211, 153)));
+                    ui.label(format!("• Effective Attenuation: {:.1} dB", report.attenuation_db));
+                    ui.label(format!(
+                        "• Level Change: {:.1} dBFS -> {:.1} dBFS (Removed Noise RMS: {:.1} dBFS)",
+                        report.input_rms_dbfs, report.cleaned_rms_dbfs, report.removed_noise_rms_dbfs
+                    ));
+                    if report.notched_frequencies.is_empty() {
+                        ui.label("• Hum Notch: None needed (no persistent hum in profile)");
+                    } else {
+                        let f_str: Vec<String> = report.notched_frequencies.iter().map(|f| format!("{:.1} Hz", f)).collect();
+                        ui.label(format!("• Hum Notch: Active on [{}]", f_str.join(", ")));
+                    }
+                    ui.label(format!("• Processing Duration: {:.1} ms", report.processing_time_ms));
                 }
             });
 

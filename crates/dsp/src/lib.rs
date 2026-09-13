@@ -9,18 +9,28 @@
 
 pub mod activity;
 pub mod analyzer;
+pub mod dc_blocker;
 pub mod error;
+pub mod mask;
 pub mod noise_profile;
+pub mod notch;
+pub mod processor;
 pub mod stationarity;
 pub mod stft;
 pub mod tonal;
+pub mod wiener;
 pub mod window;
 
 pub use activity::{detect_activity, ActivityConfig, ActivityReport};
 pub use analyzer::{NoiseAnalyzer, SignalAnalysisReport};
+pub use dc_blocker::{apply_dc_blocker, DcBlocker};
 pub use error::DspError;
+pub use mask::{MaskSmoother, MaskSmootherConfig};
 pub use noise_profile::NoiseProfile;
+pub use notch::{BiquadNotch, TonalNotchFilter};
+pub use processor::{DspConfig, DspProcessResult, DspProcessingReport, DspProcessor};
 pub use stationarity::{analyze_stationarity, StationarityReport};
 pub use stft::{Spectrogram, StftEngine};
 pub use tonal::{detect_tonal_peaks, find_mains_hum_peaks, TonalDetectionConfig, TonalPeak};
+pub use wiener::{WienerConfig, WienerSuppressor};
 pub use window::{compute_ola_normalization, hann_window};
