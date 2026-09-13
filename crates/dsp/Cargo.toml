@@ -1,0 +1,11 @@
+[package]
+name = "dsp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+audio-core = { workspace = true }
+realfft = { workspace = true }
+rustfft = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }

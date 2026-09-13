@@ -249,6 +249,7 @@ name = "app"
 version = "0.1.0"
 dependencies = [
  "audio-core",
+ "dsp",
  "eframe",
  "egui",
  "env_logger",
@@ -994,6 +995,17 @@ name = "dpi"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
+
+[[package]]
+name = "dsp"
+version = "0.1.0"
+dependencies = [
+ "audio-core",
+ "log",
+ "realfft",
+ "rustfft",
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "ecolor"

@@ -1,0 +1,26 @@
+//! DSP Analysis and Noise Processing Engine for Linux Noise Remover.
+//!
+//! Provides:
+//! - STFT / ISTFT time-frequency transform with Hann window and OLA normalization.
+//! - Power Spectral Density (PSD) estimation and noise profile generation.
+//! - Stationarity detection (evaluating fan/hiss vs burst/traffic noise).
+//! - Persistent tonal peak detection (50/60 Hz mains hum and harmonics).
+//! - Vocal activity and SNR confidence estimation.
+
+pub mod activity;
+pub mod analyzer;
+pub mod error;
+pub mod noise_profile;
+pub mod stationarity;
+pub mod stft;
+pub mod tonal;
+pub mod window;
+
+pub use activity::{detect_activity, ActivityConfig, ActivityReport};
+pub use analyzer::{NoiseAnalyzer, SignalAnalysisReport};
+pub use error::DspError;
+pub use noise_profile::NoiseProfile;
+pub use stationarity::{analyze_stationarity, StationarityReport};
+pub use stft::{Spectrogram, StftEngine};
+pub use tonal::{detect_tonal_peaks, find_mains_hum_peaks, TonalDetectionConfig, TonalPeak};
+pub use window::{compute_ola_normalization, hann_window};

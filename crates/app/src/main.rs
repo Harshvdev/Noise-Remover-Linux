@@ -3,6 +3,7 @@
 mod waveform;
 
 use std::path::PathBuf;
+use dsp::{NoiseAnalyzer, NoiseProfile, SignalAnalysisReport};
 use eframe::egui::{self, Color32, ProgressBar, RichText};
 use playback::AudioPlayer;
 use recorder::{AudioRecorder, RecorderMode};
@@ -18,6 +19,9 @@ struct NoiseRemoverApp {
     recorder: AudioRecorder,
     player: AudioPlayer,
     waveform: WaveformRenderer,
+    analyzer: Option<NoiseAnalyzer>,
+    noise_profile: Option<NoiseProfile>,
+    signal_report: Option<SignalAnalysisReport>,
     devices: Vec<(usize, String)>,
     selected_device_idx: usize,
     active_tab: AudioTab,
@@ -63,10 +67,13 @@ impl NoiseRemoverApp {
             }
         }
 
-        Self {
+        let mut app = Self {
             recorder,
             player: AudioPlayer::new(),
             waveform: WaveformRenderer::new(),
+            analyzer: NoiseAnalyzer::new(48000).ok(),
+            noise_profile: None,
+            signal_report: None,
             devices,
             selected_device_idx: selected_idx,
             active_tab: AudioTab::Original,
@@ -75,6 +82,51 @@ impl NoiseRemoverApp {
             smoothed_peak_dbfs: -96.0,
             last_finalized_count: 0,
             active_capture_mode: None,
+        };
+        app.run_dsp_analysis();
+        app
+    }
+
+    fn run_dsp_analysis(&mut self) {
+        let analyzer = match self.analyzer.as_ref() {
+            Some(a) => a,
+            None => return,
+        };
+
+        // 1. Analyze noise reference if available
+        if let Some(calib_path) = self.recorder.last_calibration_path() {
+            if calib_path.exists() {
+                if let Ok((samples, _)) = audio_core::read_wav_canonical_f32(&calib_path) {
+                    if let Ok(profile) = analyzer.analyze_noise_reference(&samples) {
+                        log::info!("[INFO] Noise stationarity: {:.2}", profile.stationarity_score);
+                        log::info!("[INFO] Estimated noise floor: {:.1} dBFS", profile.noise_floor_dbfs);
+                        for peak in &profile.tonal_peaks {
+                            log::info!(
+                                "[INFO] Tonal peak: {:.1} Hz (prominence: {:.1} dB, conf: {:.2})",
+                                peak.frequency_hz, peak.strength_db, peak.confidence
+                            );
+                        }
+                        self.noise_profile = Some(profile);
+                    }
+                }
+            }
+        }
+
+        // 2. Analyze speech recording if available
+        if let Some(ref profile) = self.noise_profile {
+            if let Some(rec_path) = self.recorder.last_recording_path() {
+                if rec_path.exists() {
+                    if let Ok((samples, _)) = audio_core::read_wav_canonical_f32(&rec_path) {
+                        if let Ok(report) = analyzer.analyze_signal(&samples, profile) {
+                            log::info!(
+                                "[INFO] Vocal activity confidence: {:.2}, SNR: {:.1} dB",
+                                report.activity.overall_confidence, report.activity.vocal_snr_db
+                            );
+                            self.signal_report = Some(report);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -93,6 +145,7 @@ impl NoiseRemoverApp {
                 }
             }
         }
+        self.run_dsp_analysis();
     }
 }
 
@@ -111,6 +164,7 @@ impl eframe::App for NoiseRemoverApp {
             let finished_mode = self.active_capture_mode.take();
             if finished_mode == Some(RecorderMode::Calibrating) {
                 self.status_message = "Noise reference calibrated (2s). Ready to record voice!".into();
+                self.run_dsp_analysis();
                 // Keep active_tab as Original (or reload reference only if user is on that tab)
                 if self.active_tab == AudioTab::NoiseReference {
                     self.reload_active_audio();
@@ -450,6 +504,57 @@ impl eframe::App for NoiseRemoverApp {
                         self.reload_active_audio();
                     }
                 });
+            });
+
+            // Collapsible DSP Noise Diagnostics (Section 68: Internal diagnostic display)
+            ui.add_space(4.0);
+            ui.collapsing("🔍 DSP Diagnostics (Phase 3)", |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("⚡ Re-run DSP Analysis").clicked() {
+                        self.run_dsp_analysis();
+                    }
+                });
+                ui.add_space(2.0);
+
+                if let Some(ref prof) = self.noise_profile {
+                    ui.label(RichText::new("Noise Reference Profile:").strong().color(Color32::from_rgb(56, 189, 248)));
+                    ui.label(format!("• Estimated Noise Floor: {:.1} dBFS", prof.noise_floor_dbfs));
+                    let stationarity_label = if prof.stationarity_score >= 0.70 {
+                        "Stationary (Fan/Hiss/Hum)"
+                    } else if prof.stationarity_score >= 0.50 {
+                        "Semi-stationary (Codec-gated / Modulated)"
+                    } else {
+                        "Non-stationary (Traffic/Bursts)"
+                    };
+                    ui.label(format!(
+                        "• Stationarity: {:.2} ({})",
+                        prof.stationarity_score,
+                        stationarity_label
+                    ));
+                    if prof.tonal_peaks.is_empty() {
+                        ui.label("• Tonal Peaks: None detected");
+                    } else {
+                        ui.label(format!("• Tonal Peaks ({} detected):", prof.tonal_peaks.len()));
+                        for p in &prof.tonal_peaks {
+                            ui.label(format!(
+                                "    - {:.1} Hz (+{:.1} dB prominence, {:.0}% conf)",
+                                p.frequency_hz, p.strength_db, p.confidence * 100.0
+                            ));
+                        }
+                    }
+                } else {
+                    ui.label(RichText::new("No noise reference calibrated yet. Click 'Calibrate Noise' to sample background.").italics());
+                }
+
+                if let Some(ref sig) = self.signal_report {
+                    ui.add_space(4.0);
+                    ui.separator();
+                    ui.label(RichText::new("Voice Recording Analysis:").strong().color(Color32::from_rgb(56, 189, 248)));
+                    ui.label(format!("• Overall Vocal Confidence: {:.2}", sig.activity.overall_confidence));
+                    ui.label(format!("• Vocal-Band SNR: {:.1} dB", sig.activity.vocal_snr_db));
+                    ui.label(format!("• Active Speech Frame Ratio: {:.1}%", sig.activity.active_frame_ratio * 100.0));
+                    ui.label(format!("• Recording RMS: {:.1} dBFS (Peak: {:.1} dBFS)", sig.rms_dbfs, sig.peak_dbfs));
+                }
             });
 
             // Status Bar at Bottom

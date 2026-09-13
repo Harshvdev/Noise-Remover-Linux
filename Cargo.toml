@@ -4,6 +4,7 @@ members = [
     "crates/recorder",
     "crates/playback",
     "crates/app",
+    "crates/dsp",
 ]
 resolver = "2"
 
@@ -11,6 +12,7 @@ resolver = "2"
 audio-core = { path = "crates/audio-core" }
 recorder = { path = "crates/recorder" }
 playback = { path = "crates/playback" }
+dsp = { path = "crates/dsp" }
 
 cpal = "0.18"
 ringbuf = "0.4"

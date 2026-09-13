@@ -11,6 +11,10 @@ pub struct AudioMeter {
     rms_bits: AtomicU32,
     /// Total clipped sample counter.
     clipping_count: AtomicU32,
+    /// Previous input sample for 1-pole DC blocker.
+    prev_in_bits: AtomicU32,
+    /// Previous output sample for 1-pole DC blocker.
+    prev_out_bits: AtomicU32,
 }
 
 impl AudioMeter {
@@ -19,10 +23,14 @@ impl AudioMeter {
             peak_bits: AtomicU32::new(0.0f32.to_bits()),
             rms_bits: AtomicU32::new(0.0f32.to_bits()),
             clipping_count: AtomicU32::new(0),
+            prev_in_bits: AtomicU32::new(0.0f32.to_bits()),
+            prev_out_bits: AtomicU32::new(0.0f32.to_bits()),
         })
     }
 
     /// Update meter metrics with a buffer of samples. Real-time safe: no allocations or blocking.
+    /// Incorporates a 1-pole DC blocker (R = 0.995, fc ~ 38 Hz) to eliminate sub-audible air turbulence
+    /// and static ADC offset from biasing live visual metering.
     #[inline]
     pub fn update(&self, samples: &[f32]) {
         if samples.is_empty() {
@@ -33,16 +41,27 @@ impl AudioMeter {
         let mut sum_sq = 0.0f32;
         let mut clipped = 0u32;
 
+        let mut prev_in = f32::from_bits(self.prev_in_bits.load(Ordering::Relaxed));
+        let mut prev_out = f32::from_bits(self.prev_out_bits.load(Ordering::Relaxed));
+
         for &s in samples {
-            let abs = s.abs();
+            // 1-pole DC blocker: y[n] = x[n] - x[n-1] + 0.995 * y[n-1]
+            let filtered = s - prev_in + 0.995 * prev_out;
+            prev_in = s;
+            prev_out = filtered;
+
+            let abs = filtered.abs();
             if abs > peak {
                 peak = abs;
             }
-            if abs >= 0.999 {
+            if abs >= 0.999 || s.abs() >= 0.999 {
                 clipped += 1;
             }
-            sum_sq += s * s;
+            sum_sq += filtered * filtered;
         }
+
+        self.prev_in_bits.store(prev_in.to_bits(), Ordering::Relaxed);
+        self.prev_out_bits.store(prev_out.to_bits(), Ordering::Relaxed);
 
         let cur_ms = sum_sq / samples.len() as f32;
         let prev_peak = f32::from_bits(self.peak_bits.load(Ordering::Relaxed));
