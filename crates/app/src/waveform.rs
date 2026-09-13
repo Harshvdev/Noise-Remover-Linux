@@ -52,10 +52,10 @@ impl WaveformRenderer {
         }
     }
 
-    /// Draw waveform inside the given Ui area.
+    /// Draw waveform inside the given Ui area with interactive click-and-drag scrubbing.
     pub fn show(&self, ui: &mut Ui, playhead_progress: f32, height: f32) -> egui::Response {
         let desired_size = Vec2::new(ui.available_width(), height);
-        let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::click());
+        let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::click_and_drag());
 
         if ui.is_rect_visible(rect) {
             let painter = ui.painter();
@@ -73,24 +73,27 @@ impl WaveformRenderer {
             if !self.peaks.is_empty() {
                 let bucket_width = rect.width() / self.peaks.len() as f32;
                 let half_height = rect.height() * 0.45;
+                let mut shapes = Vec::with_capacity(self.peaks.len() + 1);
 
                 for (i, &(min, max)) in self.peaks.iter().enumerate() {
                     let x = rect.left() + i as f32 * bucket_width;
                     let y_top = mid_y - (max.clamp(0.0, 1.0) * half_height);
                     let y_bottom = mid_y - (min.clamp(-1.0, 0.0) * half_height);
 
-                    // Waveform color: teal/cyan with soft glow
+                    // Waveform color: cyan played vs muted unplayed
                     let color = if (x - rect.left()) / rect.width() <= playhead_progress {
                         Color32::from_rgb(56, 189, 248) // bright blue played
                     } else {
                         Color32::from_rgb(71, 85, 105) // muted unplayed
                     };
 
-                    painter.line_segment(
+                    shapes.push(egui::Shape::line_segment(
                         [Pos2::new(x, y_top), Pos2::new(x, y_bottom.max(y_top + 1.0))],
                         Stroke::new(bucket_width.max(1.0), color),
-                    );
+                    ));
                 }
+
+                painter.extend(shapes);
             }
 
             // Playhead indicator

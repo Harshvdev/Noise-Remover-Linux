@@ -5,7 +5,9 @@ pub const CANONICAL_CHANNELS: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SampleFormat {
+    U8,
     I16,
+    I24,
     I32,
     F32,
 }

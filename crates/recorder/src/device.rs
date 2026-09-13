@@ -14,6 +14,14 @@ pub struct DeviceInfo {
     pub supported_channels: Vec<u16>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PipeWireSourceInfo {
+    pub name: String,
+    pub port: Option<String>,
+    pub description: String,
+    pub is_default: bool,
+}
+
 pub struct DeviceManager {
     host: Host,
 }
@@ -22,6 +30,152 @@ impl DeviceManager {
     pub fn new() -> Self {
         Self {
             host: cpal::default_host(),
+        }
+    }
+
+    /// Query Linux sound server (PipeWire / PulseAudio) for active input sources and hardware ports.
+    pub fn get_pipewire_sources() -> Vec<PipeWireSourceInfo> {
+        #[cfg(target_os = "linux")]
+        {
+            use std::process::Command;
+            let output = Command::new("pactl")
+                .args(["list", "sources"])
+                .output()
+                .ok();
+            if let Some(out) = output {
+                if out.status.success() {
+                    let text = String::from_utf8_lossy(&out.stdout);
+                    let default_src = Command::new("pactl")
+                        .args(["get-default-source"])
+                        .output()
+                        .ok()
+                        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                        .unwrap_or_default();
+
+                    let mut list = Vec::new();
+                    let mut cur_name = String::new();
+                    let mut cur_desc = String::new();
+                    let mut cur_active_port = String::new();
+                    let mut cur_ports = Vec::new();
+                    let mut is_monitor = false;
+
+                    let flush = |name: &mut String,
+                                 desc: &mut String,
+                                 active_port: &mut String,
+                                 ports: &mut Vec<String>,
+                                 monitor: &mut bool,
+                                 list: &mut Vec<PipeWireSourceInfo>| {
+                        if !name.is_empty() && !*monitor {
+                            if name.contains("bluez") {
+                                let friendly = if desc.is_empty() {
+                                    "Bluetooth Headset".to_string()
+                                } else {
+                                    format!("{} (Bluetooth)", desc)
+                                };
+                                let is_def = *name == default_src;
+                                list.push(PipeWireSourceInfo {
+                                    name: name.clone(),
+                                    port: None,
+                                    description: friendly,
+                                    is_default: is_def,
+                                });
+                            } else if ports.len() > 1 {
+                                for p in ports.iter() {
+                                    let friendly = if p == "analog-input-mic" {
+                                        "Wired Earphones (3.5mm Headset Mic)".to_string()
+                                    } else if p == "analog-input-internal-mic" {
+                                        "Built-in Microphone (Laptop Internal)".to_string()
+                                    } else {
+                                        format!("{} ({})", desc, p)
+                                    };
+                                    let is_def = *name == default_src && *active_port == *p;
+                                    list.push(PipeWireSourceInfo {
+                                        name: name.clone(),
+                                        port: Some(p.clone()),
+                                        description: friendly,
+                                        is_default: is_def,
+                                    });
+                                }
+                            } else {
+                                let p = if !active_port.is_empty() {
+                                    Some(active_port.clone())
+                                } else {
+                                    None
+                                };
+                                let friendly = if p.as_deref() == Some("analog-input-mic") {
+                                    "Wired Earphones (3.5mm Headset Mic)".to_string()
+                                } else if p.as_deref() == Some("analog-input-internal-mic") {
+                                    "Built-in Microphone (Laptop Internal)".to_string()
+                                } else if !desc.is_empty() {
+                                    desc.clone()
+                                } else {
+                                    name.clone()
+                                };
+                                let is_def = *name == default_src;
+                                list.push(PipeWireSourceInfo {
+                                    name: name.clone(),
+                                    port: p,
+                                    description: friendly,
+                                    is_default: is_def,
+                                });
+                            }
+                        }
+                        name.clear();
+                        desc.clear();
+                        active_port.clear();
+                        ports.clear();
+                        *monitor = false;
+                    };
+
+                    for line in text.lines() {
+                        let trimmed = line.trim();
+                        if trimmed.starts_with("Source #") {
+                            flush(&mut cur_name, &mut cur_desc, &mut cur_active_port, &mut cur_ports, &mut is_monitor, &mut list);
+                        } else if let Some(n) = trimmed.strip_prefix("Name: ") {
+                            cur_name = n.trim().to_string();
+                            if cur_name.contains(".monitor") {
+                                is_monitor = true;
+                            }
+                        } else if let Some(d) = trimmed.strip_prefix("Description: ") {
+                            cur_desc = d.trim().to_string();
+                        } else if let Some(p) = trimmed.strip_prefix("Active Port: ") {
+                            cur_active_port = p.trim().to_string();
+                        } else if trimmed.starts_with("analog-input-") {
+                            if let Some(port_name) = trimmed.split(':').next() {
+                                cur_ports.push(port_name.trim().to_string());
+                            }
+                        }
+                    }
+                    flush(&mut cur_name, &mut cur_desc, &mut cur_active_port, &mut cur_ports, &mut is_monitor, &mut list);
+
+                    if !list.is_empty() {
+                        return list;
+                    }
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    /// Select an active PipeWire source by index, switching hardware port if needed.
+    pub fn select_pipewire_source(&self, index: usize) -> Result<(), RecorderError> {
+        let sources = Self::get_pipewire_sources();
+        if let Some(src) = sources.get(index) {
+            #[cfg(target_os = "linux")]
+            {
+                use std::process::Command;
+                let _ = Command::new("pactl")
+                    .args(["set-default-source", &src.name])
+                    .output();
+                if let Some(ref port) = src.port {
+                    let _ = Command::new("pactl")
+                        .args(["set-source-port", &src.name, port])
+                        .output();
+                }
+            }
+            Ok(())
+        } else {
+            Err(RecorderError::DeviceNotFound(index))
         }
     }
 
@@ -37,56 +191,15 @@ impl DeviceManager {
             || lower.contains("surround")
             || lower.contains("dsnoop")
             || lower.contains("dmix")
-            || lower.starts_with("pipewire sound server") // redundant with Default
-            || lower.starts_with("pulseaudio sound server") // redundant with Default
-    }
-
-    /// On Linux, query the sound server (PipeWire/PulseAudio) to get the human-readable
-    /// description of the currently active default input source (e.g. "Rockerz 411").
-    pub fn get_system_default_source_description() -> Option<String> {
-        #[cfg(target_os = "linux")]
-        {
-            use std::process::Command;
-            let output = Command::new("pactl")
-                .args(["get-default-source"])
-                .output()
-                .ok()?;
-            if !output.status.success() {
-                return None;
-            }
-            let default_name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if default_name.is_empty() {
-                return None;
-            }
-
-            let list_out = Command::new("pactl")
-                .args(["list", "sources"])
-                .output()
-                .ok()?;
-            let text = String::from_utf8_lossy(&list_out.stdout);
-            let mut cur_name = "";
-            for line in text.lines() {
-                let trimmed = line.trim();
-                if let Some(n) = trimmed.strip_prefix("Name: ") {
-                    cur_name = n.trim();
-                } else if let Some(desc) = trimmed.strip_prefix("Description: ") {
-                    if cur_name == default_name {
-                        return Some(desc.trim().to_string());
-                    }
-                }
-            }
-        }
-        None
+            || lower.starts_with("pipewire sound server")
+            || lower.starts_with("pulseaudio sound server")
     }
 
     /// Format a friendly human-readable name for audio devices.
     fn format_friendly_name(name: &str) -> String {
         let lower = name.to_lowercase();
         if lower.contains("default") || lower == "pipewire" || lower == "pulse" {
-            if let Some(active) = Self::get_system_default_source_description() {
-                return format!("Default ({})", active);
-            }
-            return "Default (System Preferred)".to_string();
+            return "Default Audio Input".to_string();
         }
         if lower.contains("alc257") || lower.contains("generic") {
             return "Built-in Microphone (ALC257 Analog)".to_string();
@@ -95,9 +208,17 @@ impl DeviceManager {
     }
 
     /// List cleaned and curated available input devices.
-    /// Filters out internal ALSA virtual multi-channel routing plugins and ensures
-    /// "Default (System Preferred)" appears first.
+    /// Prefers PipeWire/PulseAudio input sources if available.
     pub fn list_input_devices(&self) -> Result<Vec<(usize, String)>, RecorderError> {
+        let pw_sources = Self::get_pipewire_sources();
+        if !pw_sources.is_empty() {
+            let mut list = Vec::new();
+            for (idx, src) in pw_sources.iter().enumerate() {
+                list.push((idx, src.description.clone()));
+            }
+            return Ok(list);
+        }
+
         let devices = self.host.input_devices()?;
         let mut curated = Vec::new();
         let mut default_entry = None;
@@ -114,27 +235,24 @@ impl DeviceManager {
 
             let friendly_name = Self::format_friendly_name(&raw_name);
 
-            if friendly_name == "Default (System Preferred)" {
+            if friendly_name.starts_with("Default") {
                 if default_entry.is_none() {
                     default_entry = Some((idx, friendly_name));
                 }
                 continue;
             }
 
-            // Avoid duplicate display names
             if !curated.iter().any(|(_, n): &(usize, String)| *n == friendly_name) {
                 curated.push((idx, friendly_name));
             }
         }
 
-        // Place the default system device at the very top
         let mut result = Vec::new();
         if let Some(def) = default_entry {
             result.push(def);
         }
         result.extend(curated);
 
-        // Fallback: If everything was filtered out, return raw list
         if result.is_empty() {
             if let Ok(all_devs) = self.host.input_devices() {
                 for (idx, dev) in all_devs.enumerate() {
@@ -227,6 +345,5 @@ mod tests {
             println!("  [{}] {}", idx, name);
         }
         assert!(!devs.is_empty());
-        assert!(devs[0].1.starts_with("Default"));
     }
 }

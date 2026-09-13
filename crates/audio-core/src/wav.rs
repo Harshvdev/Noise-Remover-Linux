@@ -42,8 +42,12 @@ pub fn read_wav_f32<P: AsRef<Path>>(path: P) -> Result<(Vec<f32>, AudioSpec), Wa
     let sample_format = match hound_spec.sample_format {
         hound::SampleFormat::Float => SampleFormat::F32,
         hound::SampleFormat::Int => {
-            if hound_spec.bits_per_sample <= 16 {
+            if hound_spec.bits_per_sample <= 8 {
+                SampleFormat::U8
+            } else if hound_spec.bits_per_sample <= 16 {
                 SampleFormat::I16
+            } else if hound_spec.bits_per_sample <= 24 {
+                SampleFormat::I24
             } else {
                 SampleFormat::I32
             }
@@ -59,10 +63,20 @@ pub fn read_wav_f32<P: AsRef<Path>>(path: P) -> Result<(Vec<f32>, AudioSpec), Wa
     let samples: Vec<f32> = match hound_spec.sample_format {
         hound::SampleFormat::Float => reader.samples::<f32>().map(|s| s.unwrap_or(0.0)).collect(),
         hound::SampleFormat::Int => {
-            if hound_spec.bits_per_sample <= 16 {
+            if hound_spec.bits_per_sample <= 8 {
+                reader
+                    .samples::<i8>()
+                    .map(|s| crate::pcm::i16_to_f32((s.unwrap_or(0) as i16) << 8))
+                    .collect()
+            } else if hound_spec.bits_per_sample <= 16 {
                 reader
                     .samples::<i16>()
                     .map(|s| crate::pcm::i16_to_f32(s.unwrap_or(0)))
+                    .collect()
+            } else if hound_spec.bits_per_sample <= 24 {
+                reader
+                    .samples::<i32>()
+                    .map(|s| crate::pcm::i24_to_f32(s.unwrap_or(0)))
                     .collect()
             } else {
                 reader
@@ -74,4 +88,45 @@ pub fn read_wav_f32<P: AsRef<Path>>(path: P) -> Result<(Vec<f32>, AudioSpec), Wa
     };
 
     Ok((samples, spec))
+}
+
+/// Read audio file to 32-bit floating point mono samples (downmixing if necessary).
+pub fn read_wav_canonical_f32<P: AsRef<Path>>(path: P) -> Result<(Vec<f32>, AudioSpec), WavIoError> {
+    let (samples, spec) = read_wav_f32(path)?;
+    if spec.channels == 1 {
+        Ok((samples, spec))
+    } else {
+        let mono = crate::pcm::interleaved_to_mono(&samples, spec.channels as usize);
+        let mono_spec = AudioSpec {
+            channels: 1,
+            ..spec
+        };
+        Ok((mono, mono_spec))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_write_and_read_wav_f32() {
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("test_audio_core.wav");
+        let original_samples = vec![0.0f32, 0.5, -0.5, 1.0, -1.0];
+
+        write_wav_f32(&test_file, &original_samples, 48000, 1).unwrap();
+        let (read_samples, spec) = read_wav_f32(&test_file).unwrap();
+
+        assert_eq!(spec.sample_rate, 48000);
+        assert_eq!(spec.channels, 1);
+        assert_eq!(spec.sample_format, SampleFormat::F32);
+        assert_eq!(read_samples.len(), original_samples.len());
+
+        for (a, b) in original_samples.iter().zip(read_samples.iter()) {
+            assert!((a - b).abs() < 1e-6);
+        }
+
+        std::fs::remove_file(&test_file).ok();
+    }
 }

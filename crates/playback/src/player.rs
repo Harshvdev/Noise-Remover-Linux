@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Stream, StreamConfig};
-use audio_core::read_wav_f32;
+use audio_core::read_wav_canonical_f32;
 use crate::error::PlaybackError;
 
 pub struct AudioPlayer {
@@ -30,29 +30,43 @@ impl AudioPlayer {
         }
     }
 
-    /// Load audio from a WAV file for playback.
+    /// Load audio from a WAV file for playback (downmixing multi-channel to mono).
     pub fn load_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), PlaybackError> {
         self.stop();
-        let (samples, spec) = read_wav_f32(path)?;
-        self.samples = Arc::new(samples);
-        self.sample_rate = spec.sample_rate;
-        self.playhead.store(0, Ordering::SeqCst);
-        self.setup_stream()?;
-        Ok(())
+        let (samples, spec) = read_wav_canonical_f32(path)?;
+        self.load_samples(samples, spec.sample_rate)
     }
 
-    /// Load raw samples directly into the player.
+    /// Load raw samples directly into the player, adapting to device sample rate if needed.
     pub fn load_samples(&mut self, samples: Vec<f32>, sample_rate: u32) -> Result<(), PlaybackError> {
         self.stop();
-        self.samples = Arc::new(samples);
-        self.sample_rate = sample_rate;
+        let host = cpal::default_host();
+        let device = host
+            .default_output_device()
+            .ok_or(PlaybackError::NoOutputDevice)?;
+        let default_config = device.default_output_config()?;
+        let output_rate = default_config.sample_rate();
+
+        let final_samples = if sample_rate != output_rate {
+            audio_core::resample_mono(&samples, sample_rate, output_rate)
+                .unwrap_or(samples)
+        } else {
+            samples
+        };
+
+        self.samples = Arc::new(final_samples);
+        self.sample_rate = output_rate;
         self.playhead.store(0, Ordering::SeqCst);
-        self.setup_stream()?;
+        self.setup_stream_with_device(&device, default_config)?;
         Ok(())
     }
 
     pub fn play(&self) {
         if !self.samples.is_empty() {
+            let head = self.playhead.load(Ordering::SeqCst);
+            if head >= self.samples.len() {
+                self.playhead.store(0, Ordering::SeqCst);
+            }
             self.is_playing.store(true, Ordering::SeqCst);
         }
     }
@@ -96,16 +110,12 @@ impl AudioPlayer {
         &self.samples
     }
 
-    fn setup_stream(&mut self) -> Result<(), PlaybackError> {
-        let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or(PlaybackError::NoOutputDevice)?;
-
-        let default_config = device.default_output_config()?;
-        let mut config: StreamConfig = default_config.into();
-        config.sample_rate = self.sample_rate;
-
+    fn setup_stream_with_device(
+        &mut self,
+        device: &cpal::Device,
+        default_config: cpal::SupportedStreamConfig,
+    ) -> Result<(), PlaybackError> {
+        let config: StreamConfig = default_config.into();
         let samples = self.samples.clone();
         let playhead = self.playhead.clone();
         let is_playing = self.is_playing.clone();
@@ -159,5 +169,48 @@ impl AudioPlayer {
 impl Default for AudioPlayer {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_player_initial_state() {
+        let player = AudioPlayer::new();
+        assert!(!player.is_playing());
+        assert_eq!(player.position_seconds(), 0.0);
+        assert_eq!(player.duration_seconds(), 0.0);
+        assert!(player.samples().is_empty());
+    }
+
+    #[test]
+    fn test_player_seek_and_replay() {
+        let player = AudioPlayer {
+            stream: None,
+            samples: Arc::new(vec![0.1; 48000]), // 1.0 second
+            sample_rate: 48000,
+            playhead: Arc::new(AtomicUsize::new(0)),
+            is_playing: Arc::new(AtomicBool::new(false)),
+            output_config: None,
+        };
+
+        assert_eq!(player.duration_seconds(), 1.0);
+        player.seek(0.5);
+        assert!((player.position_seconds() - 0.5).abs() < 1e-4);
+
+        // Simulate reaching EOF
+        player.seek(1.0);
+        assert_eq!(player.playhead.load(Ordering::SeqCst), 48000);
+
+        // Triggering play at EOF should reset playhead to 0
+        player.play();
+        assert_eq!(player.playhead.load(Ordering::SeqCst), 0);
+        assert!(player.is_playing());
+
+        player.stop();
+        assert!(!player.is_playing());
+        assert_eq!(player.playhead.load(Ordering::SeqCst), 0);
     }
 }

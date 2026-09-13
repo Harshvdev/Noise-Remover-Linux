@@ -11,11 +11,21 @@ pub fn i16_to_f32(sample: i16) -> f32 {
 
 #[inline]
 pub fn i32_to_f32(sample: i32) -> f32 {
+    sample as f32 / 2147483648.0
+}
+
+#[inline]
+pub fn i24_to_f32(sample: i32) -> f32 {
     if sample < 0 {
-        sample as f32 / 2147483648.0
+        sample as f32 / 8388608.0
     } else {
-        sample as f32 / 2147483647.0
+        sample as f32 / 8388607.0
     }
+}
+
+#[inline]
+pub fn u8_to_f32(sample: u8) -> f32 {
+    (sample as f32 - 128.0) / 128.0
 }
 
 #[inline]
@@ -62,6 +72,20 @@ mod tests {
         assert_eq!(i16_to_f32(0), 0.0);
         assert_eq!(i16_to_f32(32767), 1.0);
         assert_eq!(i16_to_f32(-32768), -1.0);
+    }
+
+    #[test]
+    fn test_i24_to_f32_limits() {
+        assert_eq!(i24_to_f32(0), 0.0);
+        assert_eq!(i24_to_f32(8388607), 1.0);
+        assert_eq!(i24_to_f32(-8388608), -1.0);
+    }
+
+    #[test]
+    fn test_u8_to_f32_limits() {
+        assert_eq!(u8_to_f32(128), 0.0);
+        assert_eq!(u8_to_f32(255), 127.0 / 128.0);
+        assert_eq!(u8_to_f32(0), -1.0);
     }
 
     #[test]

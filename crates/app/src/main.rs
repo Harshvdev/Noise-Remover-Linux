@@ -24,6 +24,8 @@ struct NoiseRemoverApp {
     status_message: String,
     clipping_highlight_frames: usize,
     smoothed_peak_dbfs: f32,
+    last_finalized_count: usize,
+    active_capture_mode: Option<RecorderMode>,
 }
 
 impl NoiseRemoverApp {
@@ -42,7 +44,7 @@ impl NoiseRemoverApp {
             .list_input_devices()
             .unwrap_or_default();
 
-        let mut selected_idx = 0;
+        let mut selected_idx = devices.first().map(|(i, _)| *i).unwrap_or(0);
         let mut status = "Select a microphone to begin monitoring.".to_string();
 
         if let Ok(()) = recorder.select_default_device() {
@@ -50,7 +52,7 @@ impl NoiseRemoverApp {
                 selected_idx = idx;
             }
             if let Some((_, name)) = devices.iter().find(|(i, _)| *i == selected_idx) {
-                status = format!("Monitoring default device: {}", name);
+                status = format!("Monitoring: {}", name);
             }
         } else if !devices.is_empty() {
             selected_idx = devices[0].0;
@@ -71,6 +73,8 @@ impl NoiseRemoverApp {
             status_message: status,
             clipping_highlight_frames: 0,
             smoothed_peak_dbfs: -96.0,
+            last_finalized_count: 0,
+            active_capture_mode: None,
         }
     }
 
@@ -94,9 +98,32 @@ impl NoiseRemoverApp {
 
 impl eframe::App for NoiseRemoverApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Request continuous repaint while recording, calibrating, or playing
         let status = self.recorder.status();
-        if status.mode != RecorderMode::Idle || self.player.is_playing() {
+
+        if status.mode != RecorderMode::Idle {
+            self.active_capture_mode = Some(status.mode);
+        }
+
+        // Check if recording or calibration finished writing to disk asynchronously
+        let cur_finalized = self.recorder.finalized_count();
+        if cur_finalized > self.last_finalized_count {
+            self.last_finalized_count = cur_finalized;
+            let finished_mode = self.active_capture_mode.take();
+            if finished_mode == Some(RecorderMode::Calibrating) {
+                self.status_message = "Noise reference calibrated (2s). Ready to record voice!".into();
+                // Keep active_tab as Original (or reload reference only if user is on that tab)
+                if self.active_tab == AudioTab::NoiseReference {
+                    self.reload_active_audio();
+                }
+            } else {
+                self.active_tab = AudioTab::Original;
+                self.reload_active_audio();
+                self.status_message = "Recording saved to original.wav and loaded.".into();
+            }
+        }
+
+        // Request continuous repaint while recording, calibrating, saving, or playing
+        if status.mode != RecorderMode::Idle || status.is_saving || self.player.is_playing() {
             ctx.request_repaint();
         } else {
             // Still update periodically for meters
@@ -131,25 +158,53 @@ impl eframe::App for NoiseRemoverApp {
             ui.separator();
             ui.add_space(8.0);
 
-            // Device Selection Section
+            // Top Stream Error Banner if stream disconnected or failed
+            if let Some(ref err) = status.last_error {
+                ui.group(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("⚠ Audio Stream Error:")
+                                .color(Color32::from_rgb(239, 68, 68))
+                                .strong(),
+                        );
+                        ui.label(RichText::new(err).color(Color32::from_rgb(248, 113, 113)));
+                    });
+                });
+                ui.add_space(4.0);
+            }
+
+            // Device Selection Section (disabled while actively capturing or saving)
             ui.group(|ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Input Device:").strong());
                     let prev_idx = self.selected_device_idx;
-                    egui::ComboBox::from_id_salt("device_select")
-                        .width(360.0)
-                        .selected_text(
-                            self.devices
-                                .iter()
-                                .find(|(i, _)| *i == self.selected_device_idx)
-                                .map(|(_, n)| n.as_str())
-                                .unwrap_or("No device found"),
-                        )
-                        .show_ui(ui, |ui| {
-                            for (idx, name) in &self.devices {
-                                ui.selectable_value(&mut self.selected_device_idx, *idx, name);
+                    ui.add_enabled_ui(status.mode == RecorderMode::Idle && !status.is_saving, |ui| {
+                        egui::ComboBox::from_id_salt("device_select")
+                            .width(360.0)
+                            .selected_text(
+                                self.devices
+                                    .iter()
+                                    .find(|(i, _)| *i == self.selected_device_idx)
+                                    .map(|(_, n)| n.as_str())
+                                    .unwrap_or("No device found"),
+                            )
+                            .show_ui(ui, |ui| {
+                                for (idx, name) in &self.devices {
+                                    ui.selectable_value(&mut self.selected_device_idx, *idx, name);
+                                }
+                            });
+
+                        if ui.button("🔄").on_hover_text("Refresh audio devices").clicked() {
+                            if let Ok(updated) = self.recorder.device_manager().list_input_devices() {
+                                self.devices = updated;
+                                if let Ok(()) = self.recorder.select_default_device() {
+                                    if let Some(idx) = self.recorder.selected_device_idx() {
+                                        self.selected_device_idx = idx;
+                                    }
+                                }
                             }
-                        });
+                        }
+                    });
 
                     if self.selected_device_idx != prev_idx {
                         if let Err(e) = self.recorder.select_device(self.selected_device_idx) {
@@ -233,12 +288,12 @@ impl eframe::App for NoiseRemoverApp {
             // Actions & Recording Controls
             ui.group(|ui| {
                 ui.horizontal(|ui| {
-                    // Calibration Button
                     let is_calibrating = status.mode == RecorderMode::Calibrating;
                     let is_recording = status.mode == RecorderMode::Recording;
 
+                    // Calibration Button
                     let calib_btn = ui.add_enabled(
-                        !is_calibrating && !is_recording,
+                        !is_calibrating && !is_recording && !status.is_saving,
                         egui::Button::new(RichText::new("🎯 1. Calibrate Noise (2s)").size(15.0)),
                     );
 
@@ -248,10 +303,18 @@ impl eframe::App for NoiseRemoverApp {
                             "Calibrating: please remain silent for 2 seconds...".into();
                     }
 
+                    if is_calibrating {
+                        let cancel_btn = ui.button(RichText::new("❌ Cancel").size(15.0));
+                        if cancel_btn.clicked() {
+                            self.recorder.cancel_calibration();
+                            self.status_message = "Calibration canceled.".into();
+                        }
+                    }
+
                     // Record / Stop Button
                     if !is_recording {
                         let rec_btn = ui.add_enabled(
-                            !is_calibrating,
+                            !is_calibrating && !status.is_saving,
                             egui::Button::new(
                                 RichText::new("⏺ 2. Start Recording")
                                     .size(15.0)
@@ -271,13 +334,19 @@ impl eframe::App for NoiseRemoverApp {
                         );
                         if stop_btn.clicked() {
                             self.recorder.stop_recording_or_calibration();
-                            self.status_message = "Recording saved to original.wav".into();
-                            self.reload_active_audio();
+                            self.status_message = "Finalizing recording...".into();
                         }
                     }
 
-                    // Time display
-                    if is_recording {
+                    // Time display or Saving status
+                    if status.is_saving {
+                        ui.spinner();
+                        ui.label(
+                            RichText::new("Saving audio...")
+                                .color(Color32::from_rgb(56, 189, 248))
+                                .strong(),
+                        );
+                    } else if is_recording {
                         ui.label(
                             RichText::new(format!("⏱ {:04.1}s", status.recorded_seconds))
                                 .size(16.0)
@@ -339,7 +408,7 @@ impl eframe::App for NoiseRemoverApp {
 
                 ui.add_space(4.0);
 
-                // Waveform rendering
+                // Waveform rendering with interactive scrub
                 let duration = self.player.duration_seconds();
                 let progress = if duration > 0.0 {
                     self.player.position_seconds() / duration
@@ -348,11 +417,12 @@ impl eframe::App for NoiseRemoverApp {
                 };
 
                 let waveform_response = self.waveform.show(ui, progress, 140.0);
-                if waveform_response.clicked() {
+                if (waveform_response.clicked() || waveform_response.dragged()) && duration > 0.0 {
                     if let Some(pos) = waveform_response.interact_pointer_pos() {
-                        let fraction = (pos.x - waveform_response.rect.left())
-                            / waveform_response.rect.width();
-                        self.player.seek((fraction.clamp(0.0, 1.0)) * duration);
+                        let fraction = ((pos.x - waveform_response.rect.left())
+                            / waveform_response.rect.width())
+                            .clamp(0.0, 1.0);
+                        self.player.seek(fraction * duration);
                     }
                 }
 
@@ -391,6 +461,16 @@ impl eframe::App for NoiseRemoverApp {
                         .color(Color32::from_rgb(148, 163, 184))
                         .italics(),
                 );
+
+                if status.dropped_samples > 0 {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(format!("⚠ Dropped samples: {}", status.dropped_samples))
+                                .color(Color32::from_rgb(234, 179, 8))
+                                .strong(),
+                        );
+                    });
+                }
             });
         });
     }
