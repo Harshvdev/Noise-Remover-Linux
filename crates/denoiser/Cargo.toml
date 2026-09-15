@@ -1,0 +1,10 @@
+[package]
+name = "denoiser"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+audio-core = { workspace = true }
+sherpa-onnx = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }

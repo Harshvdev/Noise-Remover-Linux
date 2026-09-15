@@ -5,6 +5,7 @@ members = [
     "crates/playback",
     "crates/app",
     "crates/dsp",
+    "crates/denoiser",
 ]
 resolver = "2"
 
@@ -13,6 +14,8 @@ audio-core = { path = "crates/audio-core" }
 recorder = { path = "crates/recorder" }
 playback = { path = "crates/playback" }
 dsp = { path = "crates/dsp" }
+denoiser = { path = "crates/denoiser" }
+sherpa-onnx = "1.13.8"
 
 cpal = "0.18"
 ringbuf = "0.4"

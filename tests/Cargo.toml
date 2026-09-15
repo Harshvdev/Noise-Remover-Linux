@@ -10,6 +10,7 @@ audio-core = { path = "../crates/audio-core" }
 recorder = { path = "../crates/recorder" }
 playback = { path = "../crates/playback" }
 dsp = { path = "../crates/dsp" }
+denoiser = { path = "../crates/denoiser" }
 hound = "3.5"
 cpal = "0.18"
 ringbuf = "0.4"
@@ -30,3 +31,8 @@ path = "phase_4/mod.rs"
 [[test]]
 name = "phase_5_tests"
 path = "phase_5/mod.rs"
+
+[[test]]
+name = "phase_6_tests"
+path = "phase_6/mod.rs"
+

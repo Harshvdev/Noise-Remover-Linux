@@ -8,6 +8,7 @@ audio-core.workspace = true
 recorder.workspace = true
 playback.workspace = true
 dsp.workspace = true
+denoiser.workspace = true
 eframe.workspace = true
 egui.workspace = true
 log.workspace = true

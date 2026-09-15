@@ -2983,7 +2983,7 @@ Linux v1 is complete when all of the following work:
 [x] tonal-noise analysis
 [x] conservative DSP suppression
 [x] residual-noise decision
-[ ] DPDFNet2-48k backend
+[x] DPDFNet2-48k backend
 [ ] latency measurement/alignment
 [ ] preservation blend
 [x] cleaned WAV
@@ -2992,11 +2992,11 @@ Linux v1 is complete when all of the following work:
 [x] waveform peak cache
 [ ] processing cancellation
 [ ] error handling
-[ ] long-recording memory test
-[ ] CPU usage test
+[x] long-recording memory test
+[x] CPU usage test
 [ ] singing preservation test
 [ ] clean-input regression test
-[ ] no-internet processing test
+[x] no-internet processing test
 ```
 
 ---
