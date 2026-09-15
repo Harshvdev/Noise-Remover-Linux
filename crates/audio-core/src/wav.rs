@@ -1,8 +1,8 @@
 //! Lossless WAV file reader and writer using Hound.
 
-use std::path::Path;
-use hound::{WavReader, WavSpec, WavWriter};
 use crate::format::{AudioSpec, SampleFormat};
+use hound::{WavReader, WavSpec, WavWriter};
+use std::path::Path;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -11,6 +11,25 @@ pub enum WavIoError {
     Hound(#[from] hound::Error),
     #[error("Unsupported bit depth: {0}")]
     UnsupportedBitDepth(u16),
+}
+
+#[derive(Error, Debug)]
+pub enum AudioLoadError {
+    #[error("WAV I/O error: {0}")]
+    WavIo(#[from] WavIoError),
+    #[error("Resampling error: {0}")]
+    Resample(#[from] crate::resample::ResampleError),
+    #[error("Failed to decode audio: {0}")]
+    DecodeFailed(String),
+    #[error("Audio too short: expected at least {expected_secs:.1}s ({expected_samples} samples), got {actual_samples} samples ({actual_secs:.1}s)")]
+    AudioTooShort {
+        expected_secs: f32,
+        expected_samples: usize,
+        actual_secs: f32,
+        actual_samples: usize,
+    },
+    #[error("File not found: {0}")]
+    FileNotFound(String),
 }
 
 /// Write 32-bit floating point PCM audio to a WAV file.
@@ -91,7 +110,9 @@ pub fn read_wav_f32<P: AsRef<Path>>(path: P) -> Result<(Vec<f32>, AudioSpec), Wa
 }
 
 /// Read audio file to 32-bit floating point mono samples (downmixing if necessary).
-pub fn read_wav_canonical_f32<P: AsRef<Path>>(path: P) -> Result<(Vec<f32>, AudioSpec), WavIoError> {
+pub fn read_wav_canonical_f32<P: AsRef<Path>>(
+    path: P,
+) -> Result<(Vec<f32>, AudioSpec), WavIoError> {
     let (samples, spec) = read_wav_f32(path)?;
     if spec.channels == 1 {
         Ok((samples, spec))
@@ -102,6 +123,75 @@ pub fn read_wav_canonical_f32<P: AsRef<Path>>(path: P) -> Result<(Vec<f32>, Audi
             ..spec
         };
         Ok((mono, mono_spec))
+    }
+}
+
+/// Load any audio file (WAV, MP3, FLAC, OGG, M4A, etc.) and convert to canonical 48 kHz mono 32-bit float samples.
+/// Native Hound is tried first for WAV files. If that fails or if the format is non-WAV, ffmpeg is used.
+pub fn load_audio_canonical_48k<P: AsRef<Path>>(path: P) -> Result<Vec<f32>, AudioLoadError> {
+    let path_ref = path.as_ref();
+    if !path_ref.exists() {
+        return Err(AudioLoadError::FileNotFound(path_ref.display().to_string()));
+    }
+
+    // 1. If it's a WAV file, first attempt native Hound reading
+    let is_wav = path_ref
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_ascii_lowercase() == "wav")
+        .unwrap_or(false);
+
+    if is_wav {
+        if let Ok((samples, spec)) = read_wav_canonical_f32(path_ref) {
+            let samples_48k = if spec.sample_rate != 48000 {
+                crate::resample::resample_mono(&samples, spec.sample_rate, 48000)?
+            } else {
+                samples
+            };
+            return Ok(samples_48k);
+        }
+    }
+
+    // 2. If Hound fails or the file is non-WAV (mp3, flac, ogg, m4a, etc.),
+    // decode via ffmpeg outputting raw 32-bit float little-endian mono PCM at 48 kHz.
+    let output = std::process::Command::new("ffmpeg")
+        .arg("-v")
+        .arg("error")
+        .arg("-i")
+        .arg(path_ref)
+        .arg("-vn")
+        .arg("-ar")
+        .arg("48000")
+        .arg("-ac")
+        .arg("1")
+        .arg("-f")
+        .arg("f32le")
+        .arg("pipe:1")
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() && !out.stdout.is_empty() => {
+            let bytes = out.stdout;
+            let sample_count = bytes.len() / 4;
+            let mut samples = Vec::with_capacity(sample_count);
+            for chunk in bytes.as_chunks::<4>().0 {
+                let s = f32::from_le_bytes(*chunk);
+                samples.push(s);
+            }
+            Ok(samples)
+        }
+        Ok(out) => {
+            let err_msg = String::from_utf8_lossy(&out.stderr);
+            Err(AudioLoadError::DecodeFailed(format!(
+                "Failed to decode '{}': {}",
+                path_ref.display(),
+                err_msg.trim()
+            )))
+        }
+        Err(e) => Err(AudioLoadError::DecodeFailed(format!(
+            "Could not decode audio file '{}' (native WAV reader failed and ffmpeg unavailable: {})",
+            path_ref.display(),
+            e
+        ))),
     }
 }
 
@@ -128,5 +218,47 @@ mod tests {
         }
 
         std::fs::remove_file(&test_file).ok();
+    }
+
+    #[test]
+    fn test_load_audio_canonical_48k_wav() {
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("test_load_44k.wav");
+        // Create 1 second of 44.1 kHz audio
+        let original_samples: Vec<f32> = (0..44100).map(|i| (i as f32 * 0.01).sin()).collect();
+        write_wav_f32(&test_file, &original_samples, 44100, 1).unwrap();
+
+        let loaded =
+            load_audio_canonical_48k(&test_file).expect("Failed to load and resample 44.1k wav");
+        assert_eq!(loaded.len(), 48000);
+
+        std::fs::remove_file(&test_file).ok();
+    }
+
+    #[test]
+    fn test_load_audio_canonical_48k_ffmpeg() {
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("test_ffmpeg_input.ogg");
+        let res = std::process::Command::new("ffmpeg")
+            .arg("-y")
+            .arg("-v")
+            .arg("error")
+            .arg("-f")
+            .arg("lavfi")
+            .arg("-i")
+            .arg("sine=frequency=440:duration=2.5")
+            .arg("-c:a")
+            .arg("libvorbis")
+            .arg(&test_file)
+            .status();
+
+        if let Ok(status) = res {
+            if status.success() {
+                let loaded =
+                    load_audio_canonical_48k(&test_file).expect("Failed to load ogg via ffmpeg");
+                assert_eq!(loaded.len(), 120000);
+            }
+        }
+        let _ = std::fs::remove_file(&test_file);
     }
 }

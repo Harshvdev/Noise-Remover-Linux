@@ -64,6 +64,20 @@ impl AudioRecorder {
         let dir = output_dir.as_ref().to_path_buf();
         std::fs::create_dir_all(&dir).ok();
 
+        let initial_rec = dir.join("original.wav");
+        let last_recording = if initial_rec.exists() {
+            Some(initial_rec)
+        } else {
+            None
+        };
+
+        let initial_calib = dir.join("noise_reference.wav");
+        let last_calib = if initial_calib.exists() {
+            Some(initial_calib)
+        } else {
+            None
+        };
+
         Self {
             device_manager: DeviceManager::new(),
             selected_device_idx: None,
@@ -76,8 +90,8 @@ impl AudioRecorder {
             writer_handle: None,
             recorded_seconds: Arc::new(Mutex::new(0.0)),
             calibration_progress: Arc::new(Mutex::new(0.0)),
-            last_recording_path: Arc::new(Mutex::new(None)),
-            last_calibration_path: Arc::new(Mutex::new(None)),
+            last_recording_path: Arc::new(Mutex::new(last_recording)),
+            last_calibration_path: Arc::new(Mutex::new(last_calib)),
             dropped_samples: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             is_saving: Arc::new(AtomicBool::new(false)),
             finalized_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -113,7 +127,8 @@ impl AudioRecorder {
 
         if self.selected_device_idx.is_none() {
             if let Ok(devices) = self.device_manager.list_input_devices() {
-                if let Some((idx, _)) = devices.iter().find(|(_, name)| name.starts_with("Default")) {
+                if let Some((idx, _)) = devices.iter().find(|(_, name)| name.starts_with("Default"))
+                {
                     self.selected_device_idx = Some(*idx);
                 } else if !devices.is_empty() {
                     self.selected_device_idx = Some(devices[0].0);
@@ -235,8 +250,16 @@ impl AudioRecorder {
         self.last_recording_path.lock().unwrap().clone()
     }
 
+    pub fn set_last_recording_path<P: Into<PathBuf>>(&self, path: P) {
+        *self.last_recording_path.lock().unwrap() = Some(path.into());
+    }
+
     pub fn last_calibration_path(&self) -> Option<PathBuf> {
         self.last_calibration_path.lock().unwrap().clone()
+    }
+
+    pub fn set_last_calibration_path<P: Into<PathBuf>>(&self, path: P) {
+        *self.last_calibration_path.lock().unwrap() = Some(path.into());
     }
 
     fn stop_stream(&mut self) {
@@ -286,37 +309,38 @@ impl AudioRecorder {
             let mut remainder_buf = Vec::<f32>::new();
 
             // Helper to process interleaved samples frame-by-frame and write mono
-            let process_and_write = |raw_samples: &[f32],
-                                     remainder: &mut Vec<f32>,
-                                     writer: &mut Option<WavWriter<std::io::BufWriter<std::fs::File>>>,
-                                     ch: usize|
-             -> usize {
-                if raw_samples.is_empty() && remainder.is_empty() {
-                    return 0;
-                }
-
-                let mut combined = std::mem::take(remainder);
-                combined.extend_from_slice(raw_samples);
-
-                let usable_frames = combined.len().checked_div(ch).unwrap_or(0);
-                let usable_samples = usable_frames * ch;
-
-                if usable_samples < combined.len() {
-                    *remainder = combined[usable_samples..].to_vec();
-                }
-
-                if usable_samples == 0 {
-                    return 0;
-                }
-
-                let mono_samples = interleaved_to_mono(&combined[..usable_samples], ch);
-                if let Some(ref mut w) = writer {
-                    for &s in &mono_samples {
-                        let _ = w.write_sample(s);
+            let process_and_write =
+                |raw_samples: &[f32],
+                 remainder: &mut Vec<f32>,
+                 writer: &mut Option<WavWriter<std::io::BufWriter<std::fs::File>>>,
+                 ch: usize|
+                 -> usize {
+                    if raw_samples.is_empty() && remainder.is_empty() {
+                        return 0;
                     }
-                }
-                mono_samples.len()
-            };
+
+                    let mut combined = std::mem::take(remainder);
+                    combined.extend_from_slice(raw_samples);
+
+                    let usable_frames = combined.len().checked_div(ch).unwrap_or(0);
+                    let usable_samples = usable_frames * ch;
+
+                    if usable_samples < combined.len() {
+                        *remainder = combined[usable_samples..].to_vec();
+                    }
+
+                    if usable_samples == 0 {
+                        return 0;
+                    }
+
+                    let mono_samples = interleaved_to_mono(&combined[..usable_samples], ch);
+                    if let Some(ref mut w) = writer {
+                        for &s in &mono_samples {
+                            let _ = w.write_sample(s);
+                        }
+                    }
+                    mono_samples.len()
+                };
 
             while is_capturing.load(Ordering::Relaxed) {
                 let current_target_mode = *mode.lock().unwrap();
@@ -331,7 +355,12 @@ impl AudioRecorder {
                             if read == 0 {
                                 break;
                             }
-                            process_and_write(&drain_buf[..read], &mut remainder_buf, &mut current_writer, channels);
+                            process_and_write(
+                                &drain_buf[..read],
+                                &mut remainder_buf,
+                                &mut current_writer,
+                                channels,
+                            );
                         }
                         process_and_write(&[], &mut remainder_buf, &mut current_writer, channels);
 
@@ -406,7 +435,12 @@ impl AudioRecorder {
 
                             if samples_in_file >= calibration_target_samples {
                                 // 2-second calibration completed automatically - finalize immediately
-                                process_and_write(&[], &mut remainder_buf, &mut current_writer, channels);
+                                process_and_write(
+                                    &[],
+                                    &mut remainder_buf,
+                                    &mut current_writer,
+                                    channels,
+                                );
                                 if let Some(w) = current_writer.take() {
                                     let _ = w.finalize();
                                 }
@@ -430,7 +464,12 @@ impl AudioRecorder {
                 if read == 0 {
                     break;
                 }
-                process_and_write(&drain_buf[..read], &mut remainder_buf, &mut current_writer, channels);
+                process_and_write(
+                    &drain_buf[..read],
+                    &mut remainder_buf,
+                    &mut current_writer,
+                    channels,
+                );
             }
             process_and_write(&[], &mut remainder_buf, &mut current_writer, channels);
 
