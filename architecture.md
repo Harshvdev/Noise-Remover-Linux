@@ -2968,28 +2968,28 @@ Model choice is validated using actual speech and singing recordings, not generi
 Linux v1 is complete when all of the following work:
 
 ```text
-[ ] microphone enumeration
-[ ] microphone selection
-[ ] calibration
-[ ] recording
-[ ] live RMS/peak meter
-[ ] clipping detection
-[ ] lossless original WAV
-[ ] noise-reference WAV
-[ ] audio canonicalization
-[ ] 48 kHz processing path
-[ ] noise profile
-[ ] stationarity analysis
-[ ] tonal-noise analysis
-[ ] conservative DSP suppression
-[ ] residual-noise decision
+[x] microphone enumeration
+[x] microphone selection
+[x] calibration
+[x] recording
+[x] live RMS/peak meter
+[x] clipping detection
+[x] lossless original WAV
+[x] noise-reference WAV
+[x] audio canonicalization
+[x] 48 kHz processing path
+[x] noise profile
+[x] stationarity analysis
+[x] tonal-noise analysis
+[x] conservative DSP suppression
+[x] residual-noise decision
 [ ] DPDFNet2-48k backend
 [ ] latency measurement/alignment
 [ ] preservation blend
-[ ] cleaned WAV
-[ ] removed-noise WAV
-[ ] original/cleaned/noise-only playback
-[ ] waveform peak cache
+[x] cleaned WAV
+[x] removed-noise WAV
+[x] original/cleaned/noise-only playback
+[x] waveform peak cache
 [ ] processing cancellation
 [ ] error handling
 [ ] long-recording memory test

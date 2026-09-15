@@ -19,8 +19,79 @@ use crate::error::DspError;
 use crate::mask::{MaskSmoother, MaskSmootherConfig};
 use crate::noise_profile::NoiseProfile;
 use crate::notch::TonalNotchFilter;
+use crate::residual::{analyze_residual, ResidualReport};
 use crate::stft::{Spectrogram, StftEngine};
 use crate::wiener::{WienerConfig, WienerSuppressor};
+
+/// User-selectable intensity preset for classical DSP suppression.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DspIntensity {
+    /// Conservative suppression (-18 dB limit). Preserves subtle singing dynamics and delicate vocal timbre.
+    Gentle,
+    /// Balanced suppression (-22 dB limit). Standard room/fan reduction with zero musical noise.
+    #[default]
+    Balanced,
+    /// Strong suppression (-28 dB limit). Deeper reduction for loud room noise, wired headset hiss, or noisy fans.
+    Aggressive,
+}
+
+impl DspIntensity {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Gentle => "Gentle (Vocal Safe)",
+            Self::Balanced => "Balanced",
+            Self::Aggressive => "Aggressive (Deep)",
+        }
+    }
+
+    pub fn to_config(self) -> DspConfig {
+        match self {
+            Self::Gentle => DspConfig {
+                enable_dc_blocker: true,
+                enable_tonal_notch: true,
+                min_notch_confidence: 0.60,
+                min_notch_strength_db: 10.0,
+                wiener: WienerConfig {
+                    oversubtraction: 1.15,
+                    min_gain: 0.12, // ~ -18.4 dB
+                    decision_directed_alpha: 0.92,
+                    vocal_protection: true,
+                },
+                mask_smoothing: MaskSmootherConfig::default(),
+            },
+            Self::Balanced => DspConfig {
+                enable_dc_blocker: true,
+                enable_tonal_notch: true,
+                min_notch_confidence: 0.60,
+                min_notch_strength_db: 10.0,
+                wiener: WienerConfig {
+                    oversubtraction: 1.30,
+                    min_gain: 0.08, // ~ -21.9 dB
+                    decision_directed_alpha: 0.90,
+                    vocal_protection: true,
+                },
+                mask_smoothing: MaskSmootherConfig::default(),
+            },
+            Self::Aggressive => DspConfig {
+                enable_dc_blocker: true,
+                enable_tonal_notch: true,
+                min_notch_confidence: 0.50,
+                min_notch_strength_db: 8.0,
+                wiener: WienerConfig {
+                    oversubtraction: 1.45,
+                    min_gain: 0.04, // ~ -28.0 dB
+                    decision_directed_alpha: 0.88,
+                    vocal_protection: true,
+                },
+                mask_smoothing: MaskSmootherConfig {
+                    attack_factor: 0.88,
+                    release_factor: 0.35,
+                    center_weight: 0.65,
+                },
+            },
+        }
+    }
+}
 
 /// Configuration for the DSP noise removal pass.
 #[derive(Debug, Clone)]
@@ -41,14 +112,7 @@ pub struct DspConfig {
 
 impl Default for DspConfig {
     fn default() -> Self {
-        Self {
-            enable_dc_blocker: true,
-            enable_tonal_notch: true,
-            min_notch_confidence: 0.60,
-            min_notch_strength_db: 10.0,
-            wiener: WienerConfig::default(),
-            mask_smoothing: MaskSmootherConfig::default(),
-        }
+        DspIntensity::Balanced.to_config()
     }
 }
 
@@ -77,6 +141,8 @@ pub struct DspProcessResult {
     pub removed_noise_samples: Vec<f32>,
     /// Detailed diagnostic report.
     pub report: DspProcessingReport,
+    /// Post-DSP residual noise evaluation and AI dispatch decision (Phase 5).
+    pub residual: ResidualReport,
 }
 
 /// Classical DSP Noise Removal Pipeline.
@@ -106,6 +172,7 @@ impl DspProcessor {
         let start_time = Instant::now();
 
         if input_samples.is_empty() {
+            let residual = analyze_residual(&[], noise_profile, activity, self.sample_rate)?;
             return Ok(DspProcessResult {
                 cleaned_samples: Vec::new(),
                 removed_noise_samples: Vec::new(),
@@ -117,6 +184,7 @@ impl DspProcessor {
                     notched_frequencies: Vec::new(),
                     processing_time_ms: 0.0,
                 },
+                residual,
             });
         }
 
@@ -216,6 +284,9 @@ impl DspProcessor {
         let attenuation_db = (input_rms_dbfs - cleaned_rms_dbfs).max(0.0);
         let processing_time_ms = start_time.elapsed().as_secs_f32() * 1000.0;
 
+        // 8. Phase 5: Post-DSP Residual Noise Analysis & AI Dispatch Decision
+        let residual = analyze_residual(&cleaned_samples, noise_profile, activity, self.sample_rate)?;
+
         Ok(DspProcessResult {
             cleaned_samples,
             removed_noise_samples,
@@ -227,6 +298,7 @@ impl DspProcessor {
                 notched_frequencies,
                 processing_time_ms,
             },
+            residual,
         })
     }
 }
@@ -257,10 +329,11 @@ mod tests {
 
         // 2. Synthesize noisy voice signal (voice burst at 1.0s to 1.5s)
         let mut vocal_recording = noise_ref.clone();
-        for i in 48000..72000 {
+        for (offset, sample) in vocal_recording[48000..72000].iter_mut().enumerate() {
+            let i = 48000 + offset;
             let t = i as f32 / sample_rate as f32;
             let voice = 0.3 * (2.0 * std::f32::consts::PI * 400.0 * t).sin();
-            vocal_recording[i] += voice;
+            *sample += voice;
         }
 
         // 3. Process through DSP

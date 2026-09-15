@@ -4,4 +4,4 @@ recordings/*.wav
 !recordings/.gitkeep
 models/*.onnx
 !models/.gitkeep
-tests/
+tests/target/

@@ -100,11 +100,9 @@ impl AudioRecorder {
 
         let pw_sources = DeviceManager::get_pipewire_sources();
         if !pw_sources.is_empty() {
-            if let Some((idx, _)) = pw_sources.iter().enumerate().find(|(_, s)| s.is_default) {
-                self.selected_device_idx = Some(idx);
-            } else {
-                self.selected_device_idx = Some(0);
-            }
+            let def_idx = pw_sources.iter().position(|s| s.is_default).unwrap_or(0);
+            self.selected_device_idx = Some(def_idx);
+            let _ = self.device_manager.select_pipewire_source(def_idx);
         }
 
         let device = self
@@ -151,6 +149,24 @@ impl AudioRecorder {
         self.start_capture_stream(&device, default_config)?;
 
         Ok(())
+    }
+
+    /// Check if the currently selected input device is muted in system settings.
+    pub fn is_selected_device_muted(&self) -> bool {
+        if let Some(idx) = self.selected_device_idx {
+            self.device_manager.is_pipewire_source_muted(idx)
+        } else {
+            false
+        }
+    }
+
+    /// Unmute the currently selected input device in system settings.
+    pub fn unmute_selected_device(&self) -> Result<(), RecorderError> {
+        if let Some(idx) = self.selected_device_idx {
+            self.device_manager.unmute_pipewire_source(idx)
+        } else {
+            Ok(())
+        }
     }
 
     /// Start 2-second ambient noise calibration.

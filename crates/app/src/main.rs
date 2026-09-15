@@ -4,10 +4,10 @@ mod waveform;
 
 use std::path::PathBuf;
 use dsp::{
-    DspConfig, DspProcessingReport, DspProcessor, NoiseAnalyzer, NoiseProfile,
-    SignalAnalysisReport,
+    DspIntensity, DspProcessingReport, DspProcessor, NoiseAnalyzer, NoiseProfile,
+    SignalAnalysisReport, DenoiseDecision, ResidualLevel, ResidualReport,
 };
-use eframe::egui::{self, Color32, ProgressBar, RichText};
+use eframe::egui::{self, Color32, ProgressBar, RichText, ScrollArea, TopBottomPanel};
 use playback::AudioPlayer;
 use recorder::{AudioRecorder, RecorderMode};
 use waveform::WaveformRenderer;
@@ -29,6 +29,8 @@ struct NoiseRemoverApp {
     signal_report: Option<SignalAnalysisReport>,
     dsp_processor: Option<DspProcessor>,
     dsp_report: Option<DspProcessingReport>,
+    residual_report: Option<ResidualReport>,
+    dsp_intensity: DspIntensity,
     devices: Vec<(usize, String)>,
     selected_device_idx: usize,
     active_tab: AudioTab,
@@ -83,6 +85,8 @@ impl NoiseRemoverApp {
             signal_report: None,
             dsp_processor: DspProcessor::new(48000).ok(),
             dsp_report: None,
+            residual_report: None,
+            dsp_intensity: DspIntensity::Balanced,
             devices,
             selected_device_idx: selected_idx,
             active_tab: AudioTab::Original,
@@ -137,6 +141,21 @@ impl NoiseRemoverApp {
                 }
             }
         }
+
+        // 3. Analyze post-DSP residual noise if dsp_cleaned.wav exists
+        if let Some(ref profile) = self.noise_profile {
+            let cleaned_path = self.dsp_cleaned_path();
+            if cleaned_path.exists() {
+                if let Ok((cleaned_samples, _)) = audio_core::read_wav_canonical_f32(&cleaned_path) {
+                    let activity = self.signal_report.as_ref().map(|r| &r.activity);
+                    if let Ok(residual) = dsp::analyze_residual(&cleaned_samples, profile, activity, 48000) {
+                        log::info!("[INFO] DSP residual: {}", residual.level.as_str());
+                        log::info!("[INFO] DSP decision: {}", residual.decision.as_str());
+                        self.residual_report = Some(residual);
+                    }
+                }
+            }
+        }
     }
 
     fn dsp_cleaned_path(&self) -> PathBuf {
@@ -180,7 +199,7 @@ impl NoiseRemoverApp {
             }
         };
 
-        let config = DspConfig::default();
+        let config = self.dsp_intensity.to_config();
         let activity = self.signal_report.as_ref().map(|r| &r.activity);
 
         match processor.process(&samples, profile, activity, &config) {
@@ -205,7 +224,13 @@ impl NoiseRemoverApp {
                 let att = result.report.attenuation_db;
                 let ms = result.report.processing_time_ms;
                 let notches = result.report.notched_frequencies.clone();
+                let res_level = result.residual.level;
+                let res_decision = result.residual.decision;
+                log::info!("[INFO] DSP residual: {}", res_level.as_str());
+                log::info!("[INFO] DSP decision: {}", res_decision.as_str());
+
                 self.dsp_report = Some(result.report);
+                self.residual_report = Some(result.residual);
                 self.active_tab = AudioTab::DspCleaned;
                 self.reload_active_audio();
 
@@ -217,8 +242,8 @@ impl NoiseRemoverApp {
                     format!(" (Hum notched: {})", freqs_str.join(", "))
                 };
                 self.status_message = format!(
-                    "DSP cleaning complete: {:.1} dB noise reduction in {:.0} ms!{}",
-                    att, ms, notch_msg
+                    "DSP cleaning complete: {:.1} dB noise reduction in {:.0} ms! Residual: {} -> {}{}",
+                    att, ms, res_level.as_str(), res_decision.as_str(), notch_msg
                 );
             }
             Err(e) => {
@@ -244,7 +269,6 @@ impl NoiseRemoverApp {
                 }
             }
         }
-        self.run_dsp_analysis();
     }
 }
 
@@ -262,6 +286,13 @@ impl eframe::App for NoiseRemoverApp {
             self.last_finalized_count = cur_finalized;
             let finished_mode = self.active_capture_mode.take();
             if finished_mode == Some(RecorderMode::Calibrating) {
+                // Invalidate stale downstream analysis and processed audio files
+                self.signal_report = None;
+                self.dsp_report = None;
+                self.residual_report = None;
+                let _ = std::fs::remove_file(self.dsp_cleaned_path());
+                let _ = std::fs::remove_file(self.removed_noise_path());
+
                 self.status_message = "Noise reference calibrated (2s). Ready to record voice!".into();
                 self.run_dsp_analysis();
                 // Keep active_tab as Original (or reload reference only if user is on that tab)
@@ -269,7 +300,14 @@ impl eframe::App for NoiseRemoverApp {
                     self.reload_active_audio();
                 }
             } else {
+                // Invalidate stale DSP results for the new vocal take
+                self.dsp_report = None;
+                self.residual_report = None;
+                let _ = std::fs::remove_file(self.dsp_cleaned_path());
+                let _ = std::fs::remove_file(self.removed_noise_path());
+
                 self.active_tab = AudioTab::Original;
+                self.run_dsp_analysis();
                 self.reload_active_audio();
                 self.status_message = "Recording saved to original.wav and loaded.".into();
             }
@@ -289,16 +327,42 @@ impl eframe::App for NoiseRemoverApp {
             self.clipping_highlight_frames -= 1;
         }
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            // Top Header
-            ui.add_space(8.0);
+        // Pinned status bar at the bottom of the window
+        TopBottomPanel::bottom("bottom_status_panel").show(ctx, |ui| {
+            ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.heading(
-                    RichText::new("🎙 Voice & Singing Noise Remover")
-                        .size(22.0)
-                        .strong()
-                        .color(Color32::from_rgb(56, 189, 248)),
+                ui.label(
+                    RichText::new(&self.status_message)
+                        .color(Color32::from_rgb(148, 163, 184))
+                        .italics(),
                 );
+
+                if status.dropped_samples > 0 {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(format!("⚠ Dropped samples: {}", status.dropped_samples))
+                                .color(Color32::from_rgb(234, 179, 8))
+                                .strong(),
+                        );
+                    });
+                }
+            });
+            ui.add_space(4.0);
+        });
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    // Top Header
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.heading(
+                            RichText::new("🎙 Voice & Singing Noise Remover")
+                                .size(22.0)
+                                .strong()
+                                .color(Color32::from_rgb(56, 189, 248)),
+                        );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         RichText::new("Offline · CPU-first · 48 kHz")
@@ -380,6 +444,28 @@ impl eframe::App for NoiseRemoverApp {
             });
 
             ui.add_space(8.0);
+
+            // Mute Warning Banner if microphone is muted in Linux sound settings
+            if self.recorder.is_selected_device_muted() {
+                ui.group(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("🔇 Microphone is MUTED in Linux system settings!")
+                                .color(Color32::from_rgb(239, 68, 68))
+                                .strong(),
+                        );
+                        if ui.button(
+                            RichText::new("🔊 Unmute Microphone")
+                                .color(Color32::WHITE)
+                                .background_color(Color32::from_rgb(37, 99, 235)),
+                        ).clicked() {
+                            let _ = self.recorder.unmute_selected_device();
+                            self.status_message = "Microphone unmuted in system settings.".into();
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+            }
 
             // Level Meter & Clipping Indicator
             ui.group(|ui| {
@@ -518,6 +604,40 @@ impl eframe::App for NoiseRemoverApp {
                         self.run_dsp_cleaning();
                     }
 
+                    // DSP Intensity Preset Selector
+                    egui::ComboBox::from_id_salt("dsp_intensity_combo")
+                        .selected_text(self.dsp_intensity.as_str())
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.dsp_intensity, DspIntensity::Gentle, DspIntensity::Gentle.as_str());
+                            ui.selectable_value(&mut self.dsp_intensity, DspIntensity::Balanced, DspIntensity::Balanced.as_str());
+                            ui.selectable_value(&mut self.dsp_intensity, DspIntensity::Aggressive, DspIntensity::Aggressive.as_str());
+                        });
+
+                    // 4. Phase 6 AI Deep Clean (Preview / Decision Status)
+                    let (ai_btn_text, ai_tooltip) = match self.residual_report.as_ref().map(|r| r.decision) {
+                        Some(DenoiseDecision::FinishWithoutAi) => (
+                            "🧠 4. Deep Clean (AI Not Needed)",
+                            "Residual noise is already low. Classical DSP was sufficient to achieve clean audio.",
+                        ),
+                        Some(DenoiseDecision::InvokeNeuralBackend) => (
+                            "🧠 4. Deep Clean (AI - Phase 6)",
+                            "Residual noise detected. Phase 6 (DPDFNet2-48k Neural Backend) will be connected next.",
+                        ),
+                        None => (
+                            "🧠 4. Deep Clean (AI - Phase 6)",
+                            "Clean with DSP first to evaluate whether neural AI denoising is required.",
+                        ),
+                    };
+
+                    let _ai_btn = ui.add_enabled(
+                        false, // Disabled until Phase 6 runtime is implemented
+                        egui::Button::new(
+                            RichText::new(ai_btn_text)
+                                .size(15.0)
+                                .color(Color32::from_rgb(168, 85, 247)),
+                        ),
+                    ).on_disabled_hover_text(ai_tooltip);
+
                     // Time display or Saving status
                     if status.is_saving {
                         ui.spinner();
@@ -568,14 +688,14 @@ impl eframe::App for NoiseRemoverApp {
                         AudioTab::NoiseReference,
                         "Noise Reference",
                     );
-                    if self.dsp_cleaned_path().exists() {
+                    if self.dsp_report.is_some() && self.dsp_cleaned_path().exists() {
                         ui.selectable_value(
                             &mut self.active_tab,
                             AudioTab::DspCleaned,
                             "✨ DSP Cleaned",
                         );
                     }
-                    if self.removed_noise_path().exists() {
+                    if self.dsp_report.is_some() && self.removed_noise_path().exists() {
                         ui.selectable_value(
                             &mut self.active_tab,
                             AudioTab::RemovedNoise,
@@ -700,6 +820,7 @@ impl eframe::App for NoiseRemoverApp {
                     ui.add_space(4.0);
                     ui.separator();
                     ui.label(RichText::new("DSP Cleaning Results (Phase 4):").strong().color(Color32::from_rgb(52, 211, 153)));
+                    ui.label(format!("• DSP Mode: {}", self.dsp_intensity.as_str()));
                     ui.label(format!("• Effective Attenuation: {:.1} dB", report.attenuation_db));
                     ui.label(format!(
                         "• Level Change: {:.1} dBFS -> {:.1} dBFS (Removed Noise RMS: {:.1} dBFS)",
@@ -713,30 +834,35 @@ impl eframe::App for NoiseRemoverApp {
                     }
                     ui.label(format!("• Processing Duration: {:.1} ms", report.processing_time_ms));
                 }
-            });
 
-            // Status Bar at Bottom
-            ui.add_space(8.0);
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(&self.status_message)
-                        .color(Color32::from_rgb(148, 163, 184))
-                        .italics(),
-                );
-
-                if status.dropped_samples > 0 {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            RichText::new(format!("⚠ Dropped samples: {}", status.dropped_samples))
-                                .color(Color32::from_rgb(234, 179, 8))
-                                .strong(),
-                        );
+                if let Some(ref res) = self.residual_report {
+                    ui.add_space(4.0);
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Residual Noise Decision (Phase 5):").strong().color(Color32::from_rgb(168, 85, 247)));
+                        let (badge_text, badge_color) = match res.level {
+                            ResidualLevel::Low => ("LOW (Clean)", Color32::from_rgb(52, 211, 153)),
+                            ResidualLevel::Moderate => ("MODERATE (Noticeable)", Color32::from_rgb(251, 191, 36)),
+                            ResidualLevel::High => ("HIGH (Significant)", Color32::from_rgb(239, 68, 68)),
+                        };
+                        ui.label(RichText::new(format!("[{}]", badge_text)).strong().color(badge_color));
                     });
+                    ui.label(format!("• Post-DSP Noise Floor: {:.1} dBFS (Original: {:.1} dBFS)", res.residual_noise_dbfs, res.original_noise_dbfs));
+                    ui.label(format!("• Post-DSP Speech SNR: {:.1} dB (Speech RMS: {:.1} dBFS)", res.post_dsp_snr_db, res.speech_rms_dbfs));
+                    ui.label(format!("• Total Classical Attenuation: {:.1} dB", res.noise_attenuation_db));
+
+                    let decision_color = match res.decision {
+                        DenoiseDecision::FinishWithoutAi => Color32::from_rgb(52, 211, 153),
+                        DenoiseDecision::InvokeNeuralBackend => Color32::from_rgb(192, 132, 252),
+                    };
+                    ui.label(RichText::new(format!("• Architectural Decision: {}", res.decision.as_str())).strong().color(decision_color));
+                    ui.label(RichText::new(format!("  ↳ {}", res.explanation)).italics().color(Color32::from_rgb(203, 213, 225)));
                 }
             });
+            ui.add_space(8.0);
         });
-    }
+    });
+}
 }
 
 fn main() -> eframe::Result<()> {

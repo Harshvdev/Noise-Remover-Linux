@@ -161,9 +161,10 @@ mod tests {
 
         // 2. Synthesize noisy voice signal: quiet noise + loud tone in middle
         let mut noisy_signal = noise.clone();
-        for i in 12000..36000 {
+        for (offset, sample) in noisy_signal[12000..36000].iter_mut().enumerate() {
+            let i = 12000 + offset;
             let t = i as f32 / sample_rate as f32;
-            noisy_signal[i] += (2.0 * std::f32::consts::PI * 440.0 * t).sin() * 0.4;
+            *sample += (2.0 * std::f32::consts::PI * 440.0 * t).sin() * 0.4;
         }
 
         let noisy_spec = engine.forward(&noisy_signal).unwrap();

@@ -20,6 +20,8 @@ pub struct PipeWireSourceInfo {
     pub port: Option<String>,
     pub description: String,
     pub is_default: bool,
+    pub is_muted: bool,
+    pub volume_percent: u32,
 }
 
 pub struct DeviceManager {
@@ -57,12 +59,16 @@ impl DeviceManager {
                     let mut cur_desc = String::new();
                     let mut cur_active_port = String::new();
                     let mut cur_ports = Vec::new();
+                    let mut cur_is_muted = false;
+                    let mut cur_volume_pct = 100u32;
                     let mut is_monitor = false;
 
                     let flush = |name: &mut String,
                                  desc: &mut String,
                                  active_port: &mut String,
                                  ports: &mut Vec<String>,
+                                 is_muted: bool,
+                                 volume_pct: u32,
                                  monitor: &mut bool,
                                  list: &mut Vec<PipeWireSourceInfo>| {
                         if !name.is_empty() && !*monitor {
@@ -78,6 +84,8 @@ impl DeviceManager {
                                     port: None,
                                     description: friendly,
                                     is_default: is_def,
+                                    is_muted,
+                                    volume_percent: volume_pct,
                                 });
                             } else if ports.len() > 1 {
                                 for p in ports.iter() {
@@ -94,6 +102,8 @@ impl DeviceManager {
                                         port: Some(p.clone()),
                                         description: friendly,
                                         is_default: is_def,
+                                        is_muted,
+                                        volume_percent: volume_pct,
                                     });
                                 }
                             } else {
@@ -117,6 +127,8 @@ impl DeviceManager {
                                     port: p,
                                     description: friendly,
                                     is_default: is_def,
+                                    is_muted,
+                                    volume_percent: volume_pct,
                                 });
                             }
                         }
@@ -130,7 +142,9 @@ impl DeviceManager {
                     for line in text.lines() {
                         let trimmed = line.trim();
                         if trimmed.starts_with("Source #") {
-                            flush(&mut cur_name, &mut cur_desc, &mut cur_active_port, &mut cur_ports, &mut is_monitor, &mut list);
+                            flush(&mut cur_name, &mut cur_desc, &mut cur_active_port, &mut cur_ports, cur_is_muted, cur_volume_pct, &mut is_monitor, &mut list);
+                            cur_is_muted = false;
+                            cur_volume_pct = 100;
                         } else if let Some(n) = trimmed.strip_prefix("Name: ") {
                             cur_name = n.trim().to_string();
                             if cur_name.contains(".monitor") {
@@ -140,13 +154,24 @@ impl DeviceManager {
                             cur_desc = d.trim().to_string();
                         } else if let Some(p) = trimmed.strip_prefix("Active Port: ") {
                             cur_active_port = p.trim().to_string();
+                        } else if let Some(m) = trimmed.strip_prefix("Mute: ") {
+                            cur_is_muted = m.trim().eq_ignore_ascii_case("yes");
+                        } else if trimmed.starts_with("Volume:") {
+                            if let Some(pct_idx) = trimmed.find('%') {
+                                let prefix = &trimmed[..pct_idx];
+                                if let Some(val_str) = prefix.split_whitespace().last() {
+                                    if let Ok(val) = val_str.parse::<u32>() {
+                                        cur_volume_pct = val;
+                                    }
+                                }
+                            }
                         } else if trimmed.starts_with("analog-input-") {
                             if let Some(port_name) = trimmed.split(':').next() {
                                 cur_ports.push(port_name.trim().to_string());
                             }
                         }
                     }
-                    flush(&mut cur_name, &mut cur_desc, &mut cur_active_port, &mut cur_ports, &mut is_monitor, &mut list);
+                    flush(&mut cur_name, &mut cur_desc, &mut cur_active_port, &mut cur_ports, cur_is_muted, cur_volume_pct, &mut is_monitor, &mut list);
 
                     if !list.is_empty() {
                         return list;
@@ -157,21 +182,91 @@ impl DeviceManager {
         Vec::new()
     }
 
-    /// Select an active PipeWire source by index, switching hardware port if needed.
+    /// Select an active PipeWire source by index, switching hardware port, unmuting, and ensuring adequate volume.
     pub fn select_pipewire_source(&self, index: usize) -> Result<(), RecorderError> {
         let sources = Self::get_pipewire_sources();
         if let Some(src) = sources.get(index) {
             #[cfg(target_os = "linux")]
             {
                 use std::process::Command;
+                // 1. Set default source in PipeWire / PulseAudio
                 let _ = Command::new("pactl")
                     .args(["set-default-source", &src.name])
                     .output();
+
+                // 2. Switch hardware port if multi-port source (e.g. wired earphones vs internal mic)
                 if let Some(ref port) = src.port {
                     let _ = Command::new("pactl")
                         .args(["set-source-port", &src.name, port])
                         .output();
                 }
+
+                // 3. Unmute source explicitly (WirePlumber / ALSA often default ports to muted)
+                let _ = Command::new("pactl")
+                    .args(["set-source-mute", &src.name, "0"])
+                    .output();
+
+                // 4. Ensure adequate capture volume if whisper-quiet (< 40%)
+                if src.volume_percent < 40 {
+                    let _ = Command::new("pactl")
+                        .args(["set-source-volume", &src.name, "80%"])
+                        .output();
+                }
+
+                // 5. Unmute hardware ALSA capture switch if present
+                let _ = Command::new("amixer")
+                    .args(["-D", "pulse", "sset", "Capture", "cap"])
+                    .output();
+                let _ = Command::new("amixer")
+                    .args(["sset", "Capture", "cap"])
+                    .output();
+
+                // Brief settling delay for PipeWire graph routing
+                std::thread::sleep(std::time::Duration::from_millis(60));
+            }
+            Ok(())
+        } else {
+            Err(RecorderError::DeviceNotFound(index))
+        }
+    }
+
+    /// Check if a PipeWire source is muted in Linux system settings.
+    pub fn is_pipewire_source_muted(&self, index: usize) -> bool {
+        let sources = Self::get_pipewire_sources();
+        if let Some(src) = sources.get(index) {
+            #[cfg(target_os = "linux")]
+            {
+                use std::process::Command;
+                if let Ok(output) = Command::new("pactl")
+                    .args(["get-source-mute", &src.name])
+                    .output()
+                {
+                    let text = String::from_utf8_lossy(&output.stdout);
+                    return text.contains("Mute: yes") || text.trim() == "yes";
+                }
+            }
+            src.is_muted
+        } else {
+            false
+        }
+    }
+
+    /// Unmute the specified PipeWire source in Linux system settings.
+    pub fn unmute_pipewire_source(&self, index: usize) -> Result<(), RecorderError> {
+        let sources = Self::get_pipewire_sources();
+        if let Some(src) = sources.get(index) {
+            #[cfg(target_os = "linux")]
+            {
+                use std::process::Command;
+                let _ = Command::new("pactl")
+                    .args(["set-source-mute", &src.name, "0"])
+                    .output();
+                let _ = Command::new("amixer")
+                    .args(["-D", "pulse", "sset", "Capture", "cap"])
+                    .output();
+                let _ = Command::new("amixer")
+                    .args(["sset", "Capture", "cap"])
+                    .output();
             }
             Ok(())
         } else {

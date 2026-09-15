@@ -1,0 +1,32 @@
+[package]
+name = "noise-remover-tests"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+audio-core = { path = "../crates/audio-core" }
+recorder = { path = "../crates/recorder" }
+playback = { path = "../crates/playback" }
+dsp = { path = "../crates/dsp" }
+hound = "3.5"
+cpal = "0.18"
+ringbuf = "0.4"
+rubato = "0.16"
+
+[[test]]
+name = "phase_1_tests"
+path = "phase_1/mod.rs"
+
+[[test]]
+name = "phase_3_tests"
+path = "phase_3/mod.rs"
+
+[[test]]
+name = "phase_4_tests"
+path = "phase_4/mod.rs"
+
+[[test]]
+name = "phase_5_tests"
+path = "phase_5/mod.rs"
