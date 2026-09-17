@@ -3,6 +3,24 @@ use egui::{Color32, Pos2, Stroke, Ui, Vec2};
 pub struct WaveformRenderer {
     peaks: Vec<(f32, f32)>, // (min, max) per bucket
     sample_count: usize,
+    fingerprint: u64,
+}
+
+fn compute_fingerprint(samples: &[f32]) -> u64 {
+    if samples.is_empty() {
+        return 0;
+    }
+    let mut hash = (samples.len() as u64).wrapping_mul(0x517cc1b727220a95);
+    // Probe 16 evenly spaced samples across the buffer
+    let stride = (samples.len() / 16).max(1);
+    let mut i = 0;
+    while i < samples.len() {
+        let bits = samples[i].to_bits() as u64;
+        hash = hash.rotate_left(5) ^ bits;
+        hash = hash.wrapping_mul(0x9e3779b97f4a7c15);
+        i += stride;
+    }
+    hash
 }
 
 impl WaveformRenderer {
@@ -10,16 +28,26 @@ impl WaveformRenderer {
         Self {
             peaks: Vec::new(),
             sample_count: 0,
+            fingerprint: 0,
         }
     }
 
-    /// Recompute peak buckets from audio samples if the buffer changed.
+    /// Invalidate and clear cached waveform peaks.
+    pub fn clear(&mut self) {
+        self.peaks.clear();
+        self.sample_count = 0;
+        self.fingerprint = 0;
+    }
+
+    /// Recompute peak buckets from audio samples if the buffer content or length changed.
     pub fn update(&mut self, samples: &[f32], target_buckets: usize) {
-        if samples.len() == self.sample_count && self.peaks.len() == target_buckets {
+        let fp = compute_fingerprint(samples);
+        if samples.len() == self.sample_count && self.peaks.len() == target_buckets && self.fingerprint == fp {
             return;
         }
 
         self.sample_count = samples.len();
+        self.fingerprint = fp;
         self.peaks.clear();
 
         if samples.is_empty() || target_buckets == 0 {

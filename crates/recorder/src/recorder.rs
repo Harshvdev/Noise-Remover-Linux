@@ -184,6 +184,20 @@ impl AudioRecorder {
         }
     }
 
+    /// Get current volume percent (0-100) for the currently selected input device.
+    pub fn get_selected_device_volume(&self) -> Option<u32> {
+        self.selected_device_idx.and_then(|idx| self.device_manager.get_pipewire_source_volume(idx))
+    }
+
+    /// Set volume percent (0-100) for the currently selected input device.
+    pub fn set_selected_device_volume(&self, volume_percent: u32) -> Result<(), RecorderError> {
+        if let Some(idx) = self.selected_device_idx {
+            self.device_manager.set_pipewire_source_volume(idx, volume_percent)
+        } else {
+            Ok(())
+        }
+    }
+
     /// Start 2-second ambient noise calibration.
     pub fn start_calibration(&self) {
         *self.mode.lock().unwrap() = RecorderMode::Calibrating;
@@ -195,6 +209,7 @@ impl AudioRecorder {
         let mut m = self.mode.lock().unwrap();
         if *m == RecorderMode::Calibrating {
             *m = RecorderMode::Idle;
+            *self.calibration_progress.lock().unwrap() = 0.0;
         }
     }
 
@@ -372,7 +387,19 @@ impl AudioRecorder {
                     } else if let Some(w) = current_writer.take() {
                         // For canceled calibration or other modes, close writer immediately
                         let _ = w.finalize();
-                        finalized_count.fetch_add(1, Ordering::SeqCst);
+                        if active_mode == RecorderMode::Calibrating {
+                            // If calibration was canceled before reaching target, discard the partial file
+                            let calib_file = output_dir.join("noise_reference.wav");
+                            if samples_in_file < calibration_target_samples {
+                                let _ = std::fs::remove_file(&calib_file);
+                                if last_calibration_path.lock().unwrap().as_deref() == Some(&calib_file) {
+                                    *last_calibration_path.lock().unwrap() = None;
+                                }
+                            }
+                            *calibration_progress.lock().unwrap() = 0.0;
+                        } else {
+                            finalized_count.fetch_add(1, Ordering::SeqCst);
+                        }
                     }
 
                     active_mode = current_target_mode;
@@ -545,6 +572,19 @@ impl AudioRecorder {
         stream.play()?;
         self.stream = Some(stream);
         self.active_config = Some(config);
+
+        // Ensure PipeWire routes this app stream to the chosen physical microphone (not monitor loopback)
+        if let Some(idx) = self.selected_device_idx {
+            let sources = DeviceManager::get_pipewire_sources();
+            if let Some(src) = sources.get(idx) {
+                let target = if src.bluetooth_card.is_some() {
+                    DeviceManager::find_active_bluez_source().unwrap_or_else(|| src.name.clone())
+                } else {
+                    src.name.clone()
+                };
+                DeviceManager::move_app_stream_to_source(&target);
+            }
+        }
 
         Ok(())
     }

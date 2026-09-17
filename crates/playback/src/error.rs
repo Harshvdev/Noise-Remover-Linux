@@ -10,4 +10,8 @@ pub enum PlaybackError {
     NoOutputDevice,
     #[error("Audio file error: {0}")]
     Wav(#[from] audio_core::WavIoError),
+    #[error("No supported stream configuration")]
+    NoSupportedConfig,
 }
+
+

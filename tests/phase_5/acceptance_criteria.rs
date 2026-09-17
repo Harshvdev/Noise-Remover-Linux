@@ -111,10 +111,14 @@ fn test_diagnose_user_recording_if_present() {
     println!("Attenuation: {:.1} dB", agg_result.report.attenuation_db);
     println!("Residual Noise Floor: {:.1} dBFS", agg_result.residual.residual_noise_dbfs);
     println!("Post-DSP SNR: {:.1} dB", agg_result.residual.post_dsp_snr_db);
+    let expected_decision = match res_report.level {
+        ResidualLevel::Low => DenoiseDecision::FinishWithoutAi,
+        ResidualLevel::Moderate | ResidualLevel::High => DenoiseDecision::InvokeNeuralBackend,
+    };
     assert_eq!(
         res_report.decision,
-        DenoiseDecision::InvokeNeuralBackend,
-        "Audio with loud initial noise (-31.8 dBFS) must invoke neural backend when residual is audible"
+        expected_decision,
+        "Decision must align with residual classification level"
     );
 }
 

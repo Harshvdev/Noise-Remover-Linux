@@ -2,7 +2,7 @@
 
 mod waveform;
 
-use denoiser::{DenoiseReport, DpdfnetDenoiser};
+use denoiser::{DenoiseReport, DpdfnetConfig, DpdfnetDenoiser};
 use dsp::{
     DenoiseDecision, DspIntensity, DspProcessingReport, DspProcessor, NoiseAnalyzer, NoiseProfile,
     ResidualLevel, ResidualReport, SignalAnalysisReport,
@@ -11,6 +11,7 @@ use eframe::egui::{self, Color32, ProgressBar, RichText, ScrollArea, TopBottomPa
 use playback::AudioPlayer;
 use recorder::{AudioRecorder, RecorderMode};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{channel, Receiver};
 use waveform::WaveformRenderer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +24,21 @@ enum AudioTab {
     RemovedDeepNoise,
 }
 
+impl AudioTab {
+    fn is_full_take(&self) -> bool {
+        !matches!(self, AudioTab::NoiseReference)
+    }
+}
+
+enum AiWorkerMessage {
+    Success {
+        cleaned: Vec<f32>,
+        removed: Vec<f32>,
+        report: DenoiseReport,
+    },
+    Error(String),
+}
+
 struct NoiseRemoverApp {
     recorder: AudioRecorder,
     player: AudioPlayer,
@@ -33,9 +49,11 @@ struct NoiseRemoverApp {
     dsp_processor: Option<DspProcessor>,
     dsp_report: Option<DspProcessingReport>,
     residual_report: Option<ResidualReport>,
-    denoiser: Option<DpdfnetDenoiser>,
+    denoiser_available: bool,
+    denoiser_config: DpdfnetConfig,
     denoise_report: Option<DenoiseReport>,
     is_ai_processing: bool,
+    ai_rx: Option<Receiver<AiWorkerMessage>>,
     dsp_intensity: DspIntensity,
     devices: Vec<(usize, String)>,
     selected_device_idx: usize,
@@ -92,18 +110,28 @@ impl NoiseRemoverApp {
             dsp_processor: DspProcessor::new(48000).ok(),
             dsp_report: None,
             residual_report: None,
-            denoiser: match DpdfnetDenoiser::load_default() {
-                Ok(d) => {
-                    log::info!("[INFO] DPDFNet2-48k neural denoiser initialized successfully");
-                    Some(d)
-                }
-                Err(e) => {
-                    log::warn!("[WARN] DPDFNet2 neural denoiser unavailable: {}", e);
-                    None
+            denoiser_available: {
+                let cfg = DpdfnetConfig::default();
+                if cfg.model_path.exists() {
+                    match DpdfnetDenoiser::new(cfg) {
+                        Ok(_) => {
+                            log::info!("[INFO] DPDFNet2-48k neural denoiser initialized successfully");
+                            true
+                        }
+                        Err(e) => {
+                            log::warn!("[WARN] DPDFNet2 neural denoiser unavailable: {}", e);
+                            false
+                        }
+                    }
+                } else {
+                    log::warn!("[WARN] DPDFNet2 model not found");
+                    false
                 }
             },
+            denoiser_config: DpdfnetConfig::default(),
             denoise_report: None,
             is_ai_processing: false,
+            ai_rx: None,
             dsp_intensity: DspIntensity::Balanced,
             devices,
             selected_device_idx: selected_idx,
@@ -275,7 +303,7 @@ impl NoiseRemoverApp {
                 self.dsp_report = Some(result.report);
                 self.residual_report = Some(result.residual);
                 self.active_tab = AudioTab::DspCleaned;
-                self.reload_active_audio();
+                self.reload_active_audio_seamless(true);
 
                 let notch_msg = if notches.is_empty() {
                     String::new()
@@ -296,8 +324,12 @@ impl NoiseRemoverApp {
     }
 
     fn run_deep_cleaning(&mut self) {
-        if self.denoiser.is_none() {
+        if !self.denoiser_available {
             self.status_message = "DPDFNet2 neural denoiser not loaded (model missing).".into();
+            return;
+        }
+
+        if self.is_ai_processing {
             return;
         }
 
@@ -330,44 +362,40 @@ impl NoiseRemoverApp {
         }
 
         self.is_ai_processing = true;
+        self.status_message = "🧠 Neural Deep Clean running in background...".into();
 
-        let denoiser = self.denoiser.as_mut().unwrap();
-        let result = denoiser.denoise_with_report(&samples);
+        let (tx, rx) = channel();
+        self.ai_rx = Some(rx);
 
-        match result {
-            Ok((cleaned, removed, report)) => {
-                let deep_path = self.deep_cleaned_path();
-                let noise_path = self.removed_deep_noise_path();
-
-                if let Err(e) = audio_core::write_wav_f32(&deep_path, &cleaned, 48000, 1) {
-                    self.status_message = format!("Failed to write deep_cleaned.wav: {}", e);
-                    self.is_ai_processing = false;
+        let config = self.denoiser_config.clone();
+        std::thread::spawn(move || {
+            let mut denoiser = match DpdfnetDenoiser::new(config) {
+                Ok(d) => d,
+                Err(e) => {
+                    let _ = tx.send(AiWorkerMessage::Error(e.to_string()));
                     return;
                 }
-
-                if let Err(e) = audio_core::write_wav_f32(&noise_path, &removed, 48000, 1) {
-                    self.status_message = format!("Failed to write removed_deep_noise.wav: {}", e);
-                    self.is_ai_processing = false;
-                    return;
+            };
+            match denoiser.denoise_with_report(&samples) {
+                Ok((cleaned, removed, report)) => {
+                    let _ = tx.send(AiWorkerMessage::Success {
+                        cleaned,
+                        removed,
+                        report,
+                    });
                 }
-
-                self.status_message = format!(
-                    "🧠 Neural Deep Clean complete: {:.1} dB attenuation in {:.0} ms (RTF: {:.3})!",
-                    report.attenuation_db, report.inference_time_ms, report.rtf
-                );
-                self.denoise_report = Some(report);
-                self.is_ai_processing = false;
-                self.active_tab = AudioTab::DeepCleaned;
-                self.reload_active_audio();
+                Err(e) => {
+                    let _ = tx.send(AiWorkerMessage::Error(e.to_string()));
+                }
             }
-            Err(e) => {
-                self.is_ai_processing = false;
-                self.status_message = format!("Neural denoising failed: {}", e);
-            }
-        }
+        });
     }
 
     fn reload_active_audio(&mut self) {
+        self.reload_active_audio_seamless(false);
+    }
+
+    fn reload_active_audio_seamless(&mut self, preserve_position: bool) {
         let path = match self.active_tab {
             AudioTab::Original => self.recorder.last_recording_path(),
             AudioTab::NoiseReference => self.recorder.last_calibration_path(),
@@ -379,7 +407,12 @@ impl NoiseRemoverApp {
 
         if let Some(p) = path {
             if p.exists() {
-                if let Err(e) = self.player.load_file(&p) {
+                let res = if preserve_position {
+                    self.player.load_file_preserve_position(&p, true)
+                } else {
+                    self.player.load_file(&p)
+                };
+                if let Err(e) = res {
                     self.status_message = format!("Playback error: {}", e);
                 } else {
                     self.waveform.update(self.player.samples(), 600);
@@ -435,6 +468,7 @@ impl NoiseRemoverApp {
         self.dsp_report = None;
         self.residual_report = None;
         self.denoise_report = None;
+        self.waveform.clear();
         let _ = std::fs::remove_file(self.dsp_cleaned_path());
         let _ = std::fs::remove_file(self.removed_noise_path());
         let _ = std::fs::remove_file(self.deep_cleaned_path());
@@ -472,6 +506,53 @@ impl eframe::App for NoiseRemoverApp {
             }
         }
 
+        // Poll for asynchronous AI deep clean completion
+        if let Some(ref rx) = self.ai_rx {
+            match rx.try_recv() {
+                Ok(AiWorkerMessage::Success {
+                    cleaned,
+                    removed,
+                    report,
+                }) => {
+                    let deep_path = self.deep_cleaned_path();
+                    let noise_path = self.removed_deep_noise_path();
+
+                    if let Err(e) = audio_core::write_wav_f32(&deep_path, &cleaned, 48000, 1) {
+                        self.status_message = format!("Failed to write deep_cleaned.wav: {}", e);
+                    } else if let Err(e) =
+                        audio_core::write_wav_f32(&noise_path, &removed, 48000, 1)
+                    {
+                        self.status_message =
+                            format!("Failed to write removed_deep_noise.wav: {}", e);
+                    } else {
+                        self.status_message = format!(
+                            "🧠 Neural Deep Clean complete: {:.1} dB attenuation in {:.0} ms (RTF: {:.3})!",
+                            report.attenuation_db, report.inference_time_ms, report.rtf
+                        );
+                        self.denoise_report = Some(report);
+                        self.active_tab = AudioTab::DeepCleaned;
+                        self.reload_active_audio_seamless(true);
+                    }
+                    self.is_ai_processing = false;
+                    self.ai_rx = None;
+                }
+                Ok(AiWorkerMessage::Error(e)) => {
+                    self.status_message = format!("Neural denoising failed: {}", e);
+                    self.is_ai_processing = false;
+                    self.ai_rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    // Still processing in background thread
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.status_message =
+                        "Neural denoiser worker disconnected unexpectedly.".into();
+                    self.is_ai_processing = false;
+                    self.ai_rx = None;
+                }
+            }
+        }
+
         let status = self.recorder.status();
 
         if status.mode != RecorderMode::Idle {
@@ -483,6 +564,7 @@ impl eframe::App for NoiseRemoverApp {
         if cur_finalized > self.last_finalized_count {
             self.last_finalized_count = cur_finalized;
             let finished_mode = self.active_capture_mode.take();
+            self.waveform.clear();
             if finished_mode == Some(RecorderMode::Calibrating) {
                 // Invalidate stale downstream analysis and processed audio files
                 self.signal_report = None;
@@ -518,8 +600,12 @@ impl eframe::App for NoiseRemoverApp {
             }
         }
 
-        // Request continuous repaint while recording, calibrating, saving, or playing
-        if status.mode != RecorderMode::Idle || status.is_saving || self.player.is_playing() {
+        // Request continuous repaint while recording, calibrating, saving, playing, or running AI inference
+        if status.mode != RecorderMode::Idle
+            || status.is_saving
+            || self.player.is_playing()
+            || self.is_ai_processing
+        {
             ctx.request_repaint();
         } else {
             // Still update periodically for meters
@@ -681,6 +767,20 @@ impl eframe::App for NoiseRemoverApp {
                             .small()
                             .color(Color32::from_rgb(148, 163, 184)),
                     );
+
+                    // Mic Input Gain slider
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if let Some(vol) = self.recorder.get_selected_device_volume() {
+                            let mut vol_val = vol as f32;
+                            ui.label("%");
+                            let slider = egui::Slider::new(&mut vol_val, 5.0..=100.0)
+                                .text("Gain");
+                            let resp = ui.add(slider);
+                            if resp.changed() {
+                                let _ = self.recorder.set_selected_device_volume(vol_val as u32);
+                            }
+                        }
+                    });
                 });
                 ui.add_space(2.0);
 
@@ -725,6 +825,26 @@ impl eframe::App for NoiseRemoverApp {
                         );
                     }
                 });
+
+                // Auto-Leveling banner if input is clipping from excessive analog hardware boost
+                if self.clipping_highlight_frames > 0 && self.smoothed_peak_dbfs > -1.0 {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("⚠️ Hardware input is clipping! Linux mic gain is over-amplifying.")
+                                .small()
+                                .color(Color32::from_rgb(239, 68, 68)),
+                        );
+                        if ui.button(
+                            RichText::new("Auto-Level to Safe Gain (25%)")
+                                .small()
+                                .color(Color32::WHITE)
+                                .background_color(Color32::from_rgb(37, 99, 235)),
+                        ).clicked() {
+                            let _ = self.recorder.set_selected_device_volume(25);
+                            self.status_message = "Microphone gain leveled to clean 25%.".into();
+                        }
+                    });
+                }
             });
 
             let is_hovering_file = ctx.input(|i| !i.raw.hovered_files.is_empty());
@@ -763,6 +883,7 @@ impl eframe::App for NoiseRemoverApp {
                         let cancel_btn = ui.button(RichText::new("❌ Cancel").size(15.0));
                         if cancel_btn.clicked() {
                             self.recorder.cancel_calibration();
+                            self.active_capture_mode = None;
                             self.status_message = "Calibration canceled.".into();
                         }
                     }
@@ -885,7 +1006,7 @@ impl eframe::App for NoiseRemoverApp {
                         && !is_calibrating
                         && !status.is_saving
                         && !self.is_ai_processing
-                        && self.denoiser.is_some()
+                        && self.denoiser_available
                         && (self.dsp_cleaned_path().exists()
                             || self
                                 .recorder
@@ -912,6 +1033,15 @@ impl eframe::App for NoiseRemoverApp {
 
                     if ai_btn.clicked() {
                         self.run_deep_cleaning();
+                    }
+
+                    if self.is_ai_processing {
+                        ui.spinner();
+                        ui.label(
+                            RichText::new("🧠 Neural Denoising...")
+                                .color(Color32::from_rgb(168, 85, 247))
+                                .strong(),
+                        );
                     }
 
                     // Time display or Saving status
@@ -994,7 +1124,8 @@ impl eframe::App for NoiseRemoverApp {
                     }
 
                     if self.active_tab != prev_tab {
-                        self.reload_active_audio();
+                        let seamless = prev_tab.is_full_take() && self.active_tab.is_full_take();
+                        self.reload_active_audio_seamless(seamless);
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1161,7 +1292,7 @@ impl eframe::App for NoiseRemoverApp {
                     ));
                     ui.label(format!("• Inference Latency: {} samples ({:.1} ms)", d_rep.latency_samples, d_rep.latency_ms));
                     ui.label(format!("• Execution Time: {:.1} ms (RTF: {:.3}x real-time)", d_rep.inference_time_ms, d_rep.rtf));
-                } else if self.denoiser.is_some() {
+                } else if self.denoiser_available {
                     ui.add_space(4.0);
                     ui.separator();
                     ui.label(RichText::new("Neural AI Deep Clean (Phase 6):").strong().color(Color32::from_rgb(168, 85, 247)));
@@ -1190,4 +1321,21 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| Ok(Box::new(NoiseRemoverApp::new(cc)))),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_app_devices() {
+        let output_dir = PathBuf::from("recordings");
+        let recorder = AudioRecorder::new(&output_dir);
+        let devices = recorder.device_manager().list_input_devices().unwrap();
+        println!("=== APP DEVICES LIST ===");
+        for (idx, name) in &devices {
+            println!("  [{}] {}", idx, name);
+        }
+        println!("========================");
+    }
 }

@@ -5,3 +5,4 @@ recordings/*.wav
 models/*.onnx
 !models/.gitkeep
 tests/target/
+misc/

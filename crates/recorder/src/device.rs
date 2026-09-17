@@ -22,6 +22,7 @@ pub struct PipeWireSourceInfo {
     pub is_default: bool,
     pub is_muted: bool,
     pub volume_percent: u32,
+    pub bluetooth_card: Option<String>,
 }
 
 pub struct DeviceManager {
@@ -32,6 +33,183 @@ impl DeviceManager {
     pub fn new() -> Self {
         Self {
             host: cpal::default_host(),
+        }
+    }
+
+    /// Discover connected Bluetooth audio headsets from Linux sound subsystem (PipeWire / PulseAudio cards).
+    fn detect_bluetooth_headsets() -> Vec<PipeWireSourceInfo> {
+        #[cfg(target_os = "linux")]
+        {
+            use std::process::Command;
+            let output = Command::new("pactl")
+                .args(["list", "cards"])
+                .output()
+                .ok();
+            if let Some(out) = output {
+                if out.status.success() {
+                    let text = String::from_utf8_lossy(&out.stdout);
+                    let mut bt_list = Vec::new();
+                    let mut cur_card_name = String::new();
+                    let mut cur_card_desc = String::new();
+                    let mut cur_is_bluez = false;
+                    let mut cur_has_headset_profile = false;
+                    let mut in_profiles = false;
+
+                    let flush_card = |name: &mut String,
+                                          desc: &mut String,
+                                          is_bluez: bool,
+                                          has_headset: bool,
+                                          list: &mut Vec<PipeWireSourceInfo>| {
+                        if is_bluez && has_headset && !name.is_empty() {
+                            let friendly = if !desc.is_empty() {
+                                format!("{} (Bluetooth Headset Mic)", desc)
+                            } else {
+                                "Bluetooth Headset Microphone".to_string()
+                            };
+                            list.push(PipeWireSourceInfo {
+                                name: name.clone(),
+                                port: None,
+                                description: friendly,
+                                is_default: false,
+                                is_muted: false,
+                                volume_percent: 100,
+                                bluetooth_card: Some(name.clone()),
+                            });
+                        }
+                        name.clear();
+                        desc.clear();
+                    };
+
+                    for line in text.lines() {
+                        let trimmed = line.trim();
+                        if trimmed.starts_with("Card #") {
+                            flush_card(
+                                &mut cur_card_name,
+                                &mut cur_card_desc,
+                                cur_is_bluez,
+                                cur_has_headset_profile,
+                                &mut bt_list,
+                            );
+                            cur_is_bluez = false;
+                            cur_has_headset_profile = false;
+                            in_profiles = false;
+                        } else if let Some(n) = trimmed.strip_prefix("Name: ") {
+                            cur_card_name = n.trim().to_string();
+                            if cur_card_name.contains("bluez") {
+                                cur_is_bluez = true;
+                            }
+                        } else if let Some(d) = trimmed.strip_prefix("device.description = ") {
+                            cur_card_desc = d.trim().trim_matches('"').to_string();
+                        } else if let Some(a) = trimmed.strip_prefix("device.alias = ") {
+                            if cur_card_desc.is_empty() {
+                                cur_card_desc = a.trim().trim_matches('"').to_string();
+                            }
+                        } else if trimmed.starts_with("Profiles:") {
+                            in_profiles = true;
+                        } else if in_profiles {
+                            if trimmed.starts_with("Active Profile:") {
+                                in_profiles = false;
+                            } else if trimmed.contains("headset-head-unit")
+                                && !trimmed.contains("available: no")
+                            {
+                                cur_has_headset_profile = true;
+                            }
+                        }
+                    }
+                    flush_card(
+                        &mut cur_card_name,
+                        &mut cur_card_desc,
+                        cur_is_bluez,
+                        cur_has_headset_profile,
+                        &mut bt_list,
+                    );
+                    return bt_list;
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    /// Discover an active bluez input source from PipeWire / PulseAudio.
+    pub fn find_active_bluez_source() -> Option<String> {
+        #[cfg(target_os = "linux")]
+        {
+            use std::process::Command;
+            let output = Command::new("pactl")
+                .args(["list", "sources", "short"])
+                .output()
+                .ok()?;
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 && parts[1].starts_with("bluez_input") {
+                    return Some(parts[1].to_string());
+                }
+            }
+        }
+        None
+    }
+
+    /// Restore connected Bluetooth audio headsets to high-fidelity stereo playback (A2DP).
+    pub fn restore_bluetooth_cards_to_a2dp() {
+        #[cfg(target_os = "linux")]
+        {
+            use std::process::Command;
+            let output = Command::new("pactl")
+                .args(["list", "cards"])
+                .output()
+                .ok();
+            if let Some(out) = output {
+                if out.status.success() {
+                    let text = String::from_utf8_lossy(&out.stdout);
+                    for line in text.lines() {
+                        let trimmed = line.trim();
+                        if let Some(card_name) = trimmed.strip_prefix("Name: bluez_card.") {
+                            let full_card = format!("bluez_card.{}", card_name.trim());
+                            let _ = Command::new("pactl")
+                                .args(["set-card-profile", &full_card, "a2dp-sink-sbc_xq"])
+                                .output();
+                            let _ = Command::new("pactl")
+                                .args(["set-card-profile", &full_card, "a2dp-sink"])
+                                .output();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Forcibly move any active app capture streams to the specified target source.
+    pub fn move_app_stream_to_source(target_source: &str) {
+        #[cfg(target_os = "linux")]
+        {
+            use std::process::Command;
+            let output = Command::new("pactl")
+                .args(["list", "source-outputs"])
+                .output()
+                .ok();
+            if let Some(out) = output {
+                if out.status.success() {
+                    let text = String::from_utf8_lossy(&out.stdout);
+                    let mut cur_id = None;
+                    for line in text.lines() {
+                        let trimmed = line.trim();
+                        if let Some(id_str) = trimmed.strip_prefix("Source Output #") {
+                            cur_id = Some(id_str.trim().to_string());
+                        }
+                        if (trimmed.contains("PipeWire ALSA [app]")
+                            || trimmed.contains("alsa_capture.app"))
+                            && cur_id.is_some()
+                        {
+                            if let Some(ref id) = cur_id {
+                                let _ = Command::new("pactl")
+                                    .args(["move-source-output", id, target_source])
+                                    .output();
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -74,9 +252,9 @@ impl DeviceManager {
                         if !name.is_empty() && !*monitor {
                             if name.contains("bluez") {
                                 let friendly = if desc.is_empty() {
-                                    "Bluetooth Headset".to_string()
+                                    "Bluetooth Headset Mic".to_string()
                                 } else {
-                                    format!("{} (Bluetooth)", desc)
+                                    format!("{} (Bluetooth Headset Mic)", desc)
                                 };
                                 let is_def = *name == default_src;
                                 list.push(PipeWireSourceInfo {
@@ -86,8 +264,9 @@ impl DeviceManager {
                                     is_default: is_def,
                                     is_muted,
                                     volume_percent: volume_pct,
+                                    bluetooth_card: None,
                                 });
-                            } else if ports.len() > 1 {
+                            } else if !ports.is_empty() {
                                 for p in ports.iter() {
                                     let friendly = if p == "analog-input-mic" {
                                         "Wired Earphones (3.5mm Headset Mic)".to_string()
@@ -104,17 +283,16 @@ impl DeviceManager {
                                         is_default: is_def,
                                         is_muted,
                                         volume_percent: volume_pct,
+                                        bluetooth_card: None,
                                     });
                                 }
                             } else {
-                                let p = if !active_port.is_empty() {
+                                let p = if !active_port.is_empty() && active_port != "analog-input-mic" {
                                     Some(active_port.clone())
                                 } else {
                                     None
                                 };
-                                let friendly = if p.as_deref() == Some("analog-input-mic") {
-                                    "Wired Earphones (3.5mm Headset Mic)".to_string()
-                                } else if p.as_deref() == Some("analog-input-internal-mic") {
+                                let friendly = if p.as_deref() == Some("analog-input-internal-mic") {
                                     "Built-in Microphone (Laptop Internal)".to_string()
                                 } else if !desc.is_empty() {
                                     desc.clone()
@@ -129,6 +307,7 @@ impl DeviceManager {
                                     is_default: is_def,
                                     is_muted,
                                     volume_percent: volume_pct,
+                                    bluetooth_card: None,
                                 });
                             }
                         }
@@ -166,12 +345,35 @@ impl DeviceManager {
                                 }
                             }
                         } else if trimmed.starts_with("analog-input-") {
-                            if let Some(port_name) = trimmed.split(':').next() {
-                                cur_ports.push(port_name.trim().to_string());
+                            // Only include ports that are plugged in / available (filter out "not available")
+                            if !trimmed.contains("not available") {
+                                if let Some(port_name) = trimmed.split(':').next() {
+                                    cur_ports.push(port_name.trim().to_string());
+                                }
                             }
                         }
                     }
                     flush(&mut cur_name, &mut cur_desc, &mut cur_active_port, &mut cur_ports, cur_is_muted, cur_volume_pct, &mut is_monitor, &mut list);
+
+                    // Discover connected Bluetooth audio headsets (e.g. in A2DP mode without capture source yet)
+                    let bt_cards = Self::detect_bluetooth_headsets();
+                    for bt in bt_cards {
+                        let already_present = list.iter().any(|s| {
+                            if let Some(ref card) = bt.bluetooth_card {
+                                s.name.contains(card) || s.description.contains(&bt.description)
+                            } else {
+                                false
+                            }
+                        });
+                        if !already_present {
+                            list.push(bt);
+                        }
+                    }
+
+                    // If default source was a monitor or not in list, make the first physical mic default
+                    if !list.is_empty() && !list.iter().any(|s| s.is_default) {
+                        list[0].is_default = true;
+                    }
 
                     if !list.is_empty() {
                         return list;
@@ -189,31 +391,77 @@ impl DeviceManager {
             #[cfg(target_os = "linux")]
             {
                 use std::process::Command;
+
+                let mut active_source_name = src.name.clone();
+
+                if let Some(ref card_name) = src.bluetooth_card {
+                    // Switch Bluetooth card to headset profile (mSBC wideband speech if supported, else HSP/HFP)
+                    let _ = Command::new("pactl")
+                        .args(["set-card-profile", card_name, "headset-head-unit-msbc"])
+                        .output();
+                    let _ = Command::new("pactl")
+                        .args(["set-card-profile", card_name, "headset-head-unit"])
+                        .output();
+
+                    // Wait for bluez_input source to appear
+                    for _ in 0..10 {
+                        std::thread::sleep(std::time::Duration::from_millis(30));
+                        if let Some(found_src) = Self::find_active_bluez_source() {
+                            active_source_name = found_src;
+                            break;
+                        }
+                    }
+                } else {
+                    // Switching to internal/hardware mic
+                    if let Some(ref port) = src.port {
+                        let _ = Command::new("pactl")
+                            .args(["set-source-port", &src.name, port])
+                            .output();
+                    }
+                    // Restore Bluetooth headphones to high-fidelity stereo A2DP playback
+                    Self::restore_bluetooth_cards_to_a2dp();
+                }
+
                 // 1. Set default source in PipeWire / PulseAudio
                 let _ = Command::new("pactl")
-                    .args(["set-default-source", &src.name])
+                    .args(["set-default-source", &active_source_name])
                     .output();
 
-                // 2. Switch hardware port if multi-port source (e.g. wired earphones vs internal mic)
-                if let Some(ref port) = src.port {
-                    let _ = Command::new("pactl")
-                        .args(["set-source-port", &src.name, port])
-                        .output();
-                }
-
-                // 3. Unmute source explicitly (WirePlumber / ALSA often default ports to muted)
+                // 2. Unmute source explicitly (WirePlumber / ALSA often default ports to muted)
                 let _ = Command::new("pactl")
-                    .args(["set-source-mute", &src.name, "0"])
+                    .args(["set-source-mute", &active_source_name, "0"])
                     .output();
 
-                // 4. Ensure adequate capture volume if whisper-quiet (< 40%)
-                if src.volume_percent < 40 {
-                    let _ = Command::new("pactl")
-                        .args(["set-source-volume", &src.name, "80%"])
+                // 3. Ensure adequate capture volume without overdriving ALSA hardware preamps.
+                // Bluetooth digital headsets (mSBC/HFP) operate cleanly with digital volume at ~80%.
+                // ALSA analog internal microphones (e.g. Realtek ALC257) have a 0dB unity gain base at 10%.
+                // In PipeWire, setting volume > 35% triggers 10dB to 20dB of hardware analog boost in ALSA,
+                // which overamplifies ambient room noise and fan hum, causing hard 0dBFS clipping (32767).
+                // Therefore:
+                // - For Bluetooth: ensure volume is at least 80% if uninitialized.
+                // - For ALSA analog mic: if volume is 0% or excessively boosted (> 35%), normalize to clean 25% (0dB boost, ~23dB clean gain).
+                if src.bluetooth_card.is_some() {
+                    if src.volume_percent == 0 {
+                        let _ = Command::new("pactl")
+                            .args(["set-source-volume", &active_source_name, "80%"])
+                            .output();
+                    }
+                } else {
+                    if src.volume_percent == 0 || src.volume_percent > 35 {
+                        let _ = Command::new("pactl")
+                            .args(["set-source-volume", &active_source_name, "25%"])
+                            .output();
+                    }
+                    // Reset excessive hardware internal mic boost to 0 dB if card exposes it
+                    let _ = Command::new("amixer")
+                        .args(["sset", "Internal Mic Boost", "0"])
+                        .output();
+                    let _ = Command::new("amixer")
+                        .args(["sset", "Mic Boost", "0"])
                         .output();
                 }
 
-                // 5. Unmute hardware ALSA capture switch if present
+                // 4. Unmute hardware ALSA capture switch if present
                 let _ = Command::new("amixer")
                     .args(["-D", "pulse", "sset", "Capture", "cap"])
                     .output();
@@ -221,8 +469,60 @@ impl DeviceManager {
                     .args(["sset", "Capture", "cap"])
                     .output();
 
+                // 5. Move any existing app capture streams to target source
+                Self::move_app_stream_to_source(&active_source_name);
+
                 // Brief settling delay for PipeWire graph routing
                 std::thread::sleep(std::time::Duration::from_millis(60));
+            }
+            Ok(())
+        } else {
+            Err(RecorderError::DeviceNotFound(index))
+        }
+    }
+
+    /// Get current volume percent (0-100) for the specified source.
+    pub fn get_pipewire_source_volume(&self, index: usize) -> Option<u32> {
+        let sources = Self::get_pipewire_sources();
+        let src = sources.get(index)?;
+        #[cfg(target_os = "linux")]
+        {
+            use std::process::Command;
+            if let Ok(output) = Command::new("pactl")
+                .args(["get-source-volume", &src.name])
+                .output()
+            {
+                let text = String::from_utf8_lossy(&output.stdout);
+                if let Some(pct_idx) = text.find('%') {
+                    let prefix = &text[..pct_idx];
+                    if let Some(val_str) = prefix.split_whitespace().last() {
+                        if let Ok(val) = val_str.parse::<u32>() {
+                            return Some(val);
+                        }
+                    }
+                }
+            }
+        }
+        Some(src.volume_percent)
+    }
+
+    /// Set volume percent (0-100) for the specified source.
+    pub fn set_pipewire_source_volume(&self, index: usize, volume_percent: u32) -> Result<(), RecorderError> {
+        let sources = Self::get_pipewire_sources();
+        if let Some(src) = sources.get(index) {
+            #[cfg(target_os = "linux")]
+            {
+                use std::process::Command;
+                let vol_str = format!("{}%", volume_percent.clamp(0, 100));
+                let _ = Command::new("pactl")
+                    .args(["set-source-volume", &src.name, &vol_str])
+                    .output();
+                // If setting analog mic to <= 35%, also reset hardware boost to 0dB
+                if src.bluetooth_card.is_none() && volume_percent <= 35 {
+                    let _ = Command::new("amixer")
+                        .args(["sset", "Internal Mic Boost", "0"])
+                        .output();
+                }
             }
             Ok(())
         } else {

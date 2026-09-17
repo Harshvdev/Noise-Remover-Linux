@@ -85,7 +85,7 @@ pub fn read_wav_f32<P: AsRef<Path>>(path: P) -> Result<(Vec<f32>, AudioSpec), Wa
             if hound_spec.bits_per_sample <= 8 {
                 reader
                     .samples::<i8>()
-                    .map(|s| crate::pcm::i16_to_f32((s.unwrap_or(0) as i16) << 8))
+                    .map(|s| crate::pcm::u8_to_f32(s.unwrap_or(0) as u8))
                     .collect()
             } else if hound_spec.bits_per_sample <= 16 {
                 reader
@@ -261,4 +261,32 @@ mod tests {
         }
         let _ = std::fs::remove_file(&test_file);
     }
+
+    #[test]
+    fn test_read_8bit_wav() {
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("test_8bit.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 48000,
+            bits_per_sample: 8,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&test_file, spec).unwrap();
+        // 8-bit unsigned PCM: 0 = -1.0, 128 = 0.0, 255 = ~0.992
+        writer.write_sample(0i8).unwrap();   // byte 0
+        writer.write_sample(-128i8).unwrap(); // byte 0x80 = 128 (silence)
+        writer.write_sample(-1i8).unwrap();   // byte 0xFF = 255
+        writer.finalize().unwrap();
+
+        let (read_samples, audio_spec) = read_wav_f32(&test_file).unwrap();
+        assert_eq!(audio_spec.sample_format, SampleFormat::U8);
+        assert_eq!(read_samples.len(), 3);
+        assert!((read_samples[0] - (-1.0)).abs() < 1e-5);
+        assert!((read_samples[1] - 0.0).abs() < 1e-5);
+        assert!((read_samples[2] - (127.0 / 128.0)).abs() < 1e-5);
+
+        let _ = std::fs::remove_file(&test_file);
+    }
 }
+

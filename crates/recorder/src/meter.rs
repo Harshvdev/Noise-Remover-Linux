@@ -43,10 +43,22 @@ impl AudioMeter {
 
         let mut prev_in = f32::from_bits(self.prev_in_bits.load(Ordering::Relaxed));
         let mut prev_out = f32::from_bits(self.prev_out_bits.load(Ordering::Relaxed));
+        if !prev_in.is_finite() {
+            prev_in = 0.0;
+        }
+        if !prev_out.is_finite() {
+            prev_out = 0.0;
+        }
 
         for &s in samples {
+            if !s.is_finite() {
+                continue;
+            }
             // 1-pole DC blocker: y[n] = x[n] - x[n-1] + 0.995 * y[n-1]
-            let filtered = s - prev_in + 0.995 * prev_out;
+            let mut filtered = s - prev_in + 0.995 * prev_out;
+            if !filtered.is_finite() {
+                filtered = s;
+            }
             prev_in = s;
             prev_out = filtered;
 
@@ -89,7 +101,7 @@ impl AudioMeter {
     /// Returns peak level in dBFS (range -96.0 to 0.0).
     pub fn peak_dbfs(&self) -> f32 {
         let linear = f32::from_bits(self.peak_bits.load(Ordering::Relaxed));
-        if linear <= 1e-5 {
+        if !linear.is_finite() || linear <= 1e-5 {
             -96.0
         } else {
             (20.0 * linear.log10()).clamp(-96.0, 0.0)
@@ -99,7 +111,7 @@ impl AudioMeter {
     /// Returns RMS level in dBFS.
     pub fn rms_dbfs(&self) -> f32 {
         let linear = f32::from_bits(self.rms_bits.load(Ordering::Relaxed));
-        if linear <= 1e-5 {
+        if !linear.is_finite() || linear <= 1e-5 {
             -96.0
         } else {
             (20.0 * linear.log10()).clamp(-96.0, 0.0)
