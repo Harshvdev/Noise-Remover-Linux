@@ -2,7 +2,10 @@
 
 mod waveform;
 
-use denoiser::{DenoiseReport, DpdfnetConfig, DpdfnetDenoiser};
+use denoiser::{
+    DeepFilterConfig, DeepFilterDenoiser, DenoiseReport, DpdfnetConfig, DpdfnetDenoiser,
+    NeuralModel,
+};
 use dsp::{
     DenoiseDecision, DspIntensity, DspProcessingReport, DspProcessor, NoiseAnalyzer, NoiseProfile,
     ResidualLevel, ResidualReport, SignalAnalysisReport,
@@ -68,7 +71,12 @@ struct NoiseRemoverApp {
     dsp_report: Option<DspProcessingReport>,
     residual_report: Option<ResidualReport>,
     denoiser_available: bool,
+    selected_neural_model: NeuralModel,
+    dpdfnet_available: bool,
+    deepfilter_available: bool,
     denoiser_config: DpdfnetConfig,
+    deepfilter_config: DeepFilterConfig,
+    deepfilter_post_filter: bool,
     denoise_report: Option<DenoiseReport>,
     is_ai_processing: bool,
     ai_rx: Option<Receiver<AiWorkerMessage>>,
@@ -134,25 +142,13 @@ impl NoiseRemoverApp {
             signal_report: None,
             dsp_report: None,
             residual_report: None,
-            denoiser_available: {
-                let cfg = DpdfnetConfig::default();
-                if cfg.model_path.exists() {
-                    match DpdfnetDenoiser::new(cfg) {
-                        Ok(_) => {
-                            log::info!("[INFO] DPDFNet2-48k neural denoiser initialized successfully");
-                            true
-                        }
-                        Err(e) => {
-                            log::warn!("[WARN] DPDFNet2 neural denoiser unavailable: {}", e);
-                            false
-                        }
-                    }
-                } else {
-                    log::warn!("[WARN] DPDFNet2 model not found");
-                    false
-                }
-            },
+            denoiser_available: false,
+            selected_neural_model: NeuralModel::Dpdfnet2_48k,
+            dpdfnet_available: false,
+            deepfilter_available: false,
             denoiser_config: DpdfnetConfig::default(),
+            deepfilter_config: DeepFilterConfig::default(),
+            deepfilter_post_filter: false,
             denoise_report: None,
             is_ai_processing: false,
             ai_rx: None,
@@ -173,6 +169,41 @@ impl NoiseRemoverApp {
             last_finalized_count: 0,
             active_capture_mode: None,
         };
+
+        // Initialize neural denoiser backends (DPDFNet2 & DeepFilterNet3)
+        let dpdf_cfg = DpdfnetConfig::default();
+        if dpdf_cfg.model_path.exists() {
+            match DpdfnetDenoiser::new(dpdf_cfg) {
+                Ok(_) => {
+                    log::info!("[INFO] DPDFNet2-48k neural denoiser initialized successfully");
+                    app.dpdfnet_available = true;
+                }
+                Err(e) => {
+                    log::warn!("[WARN] DPDFNet2 neural denoiser unavailable: {}", e);
+                }
+            }
+        }
+
+        let df_cfg = DeepFilterConfig::default();
+        if df_cfg.binary_path.exists() {
+            match DeepFilterDenoiser::new(df_cfg) {
+                Ok(_) => {
+                    log::info!("[INFO] DeepFilterNet3 neural denoiser initialized successfully");
+                    app.deepfilter_available = true;
+                }
+                Err(e) => {
+                    log::warn!("[WARN] DeepFilterNet3 neural denoiser unavailable: {}", e);
+                }
+            }
+        }
+
+        app.denoiser_available = app.dpdfnet_available || app.deepfilter_available;
+        if app.dpdfnet_available {
+            app.selected_neural_model = NeuralModel::Dpdfnet2_48k;
+        } else if app.deepfilter_available {
+            app.selected_neural_model = NeuralModel::DeepFilterNet3;
+        }
+
         app.run_dsp_analysis();
         app.reload_active_audio();
         app
@@ -339,8 +370,20 @@ impl NoiseRemoverApp {
 
     fn run_deep_cleaning(&mut self) {
         if !self.denoiser_available {
-            self.status_message = "DPDFNet2 neural denoiser not loaded (model missing).".into();
+            self.status_message = "No neural denoiser backend available (models missing).".into();
             return;
+        }
+
+        match self.selected_neural_model {
+            NeuralModel::Dpdfnet2_48k if !self.dpdfnet_available => {
+                self.status_message = "DPDFNet2 model not loaded (weights missing).".into();
+                return;
+            }
+            NeuralModel::DeepFilterNet3 if !self.deepfilter_available => {
+                self.status_message = "DeepFilterNet3 binary not loaded (missing).".into();
+                return;
+            }
+            _ => {}
         }
 
         if self.is_ai_processing {
@@ -376,25 +419,42 @@ impl NoiseRemoverApp {
         }
 
         self.is_ai_processing = true;
-        self.status_message = "🧠 Neural Deep Clean running in background...".into();
+        let model_tag = self.selected_neural_model.display_name();
+        self.status_message = format!("🧠 Neural Deep Clean running in background ({model_tag})...");
 
         let (tx, rx) = channel();
         self.ai_rx = Some(rx);
 
-        let mut config = self.denoiser_config.clone();
+        let selected_model = self.selected_neural_model;
+        let mut dpdf_config = self.denoiser_config.clone();
         if !self.adaptive_preservation {
-            config.preservation = dsp::PreservationMode::Global(self.manual_preservation_alpha);
+            dpdf_config.preservation = dsp::PreservationMode::Global(self.manual_preservation_alpha);
         }
+
+        let mut df_config = self.deepfilter_config.clone();
+        df_config.post_filter = self.deepfilter_post_filter;
+        if !self.adaptive_preservation {
+            df_config.preservation = dsp::PreservationMode::Global(self.manual_preservation_alpha);
+        }
+
         let activity = self.signal_report.as_ref().map(|r| r.activity.clone());
         std::thread::spawn(move || {
-            let mut denoiser = match DpdfnetDenoiser::new(config) {
-                Ok(d) => d,
-                Err(e) => {
-                    let _ = tx.send(AiWorkerMessage::Error(e.to_string()));
-                    return;
+            let res = match selected_model {
+                NeuralModel::Dpdfnet2_48k => {
+                    match DpdfnetDenoiser::new(dpdf_config) {
+                        Ok(mut denoiser) => denoiser.denoise_with_activity(&samples, activity.as_ref()),
+                        Err(e) => Err(e),
+                    }
+                }
+                NeuralModel::DeepFilterNet3 => {
+                    match DeepFilterDenoiser::new(df_config) {
+                        Ok(mut denoiser) => denoiser.denoise_with_activity(&samples, activity.as_ref()),
+                        Err(e) => Err(e),
+                    }
                 }
             };
-            match denoiser.denoise_with_activity(&samples, activity.as_ref()) {
+
+            match res {
                 Ok((cleaned, removed, report)) => {
                     let _ = tx.send(AiWorkerMessage::Success {
                         cleaned,
@@ -1209,21 +1269,49 @@ impl eframe::App for NoiseRemoverApp {
                         .on_hover_text("Manual preservation blend: 0.0 = 100% Original, 1.0 = 100% Processed");
                     }
 
-                    // 4. Phase 6 AI Deep Clean
+                    // 4. Phase 6 & 8 AI Deep Clean
+                    let model_label = match self.selected_neural_model {
+                        NeuralModel::Dpdfnet2_48k => "DPDFNet2",
+                        NeuralModel::DeepFilterNet3 => "DeepFilter3",
+                    };
                     let (ai_btn_text, ai_tooltip) = match self.residual_report.as_ref().map(|r| r.decision) {
                         Some(DenoiseDecision::FinishWithoutAi) => (
-                            "🧠 4. Deep Clean (AI Optional)",
-                            "Residual noise is already low. Classical DSP was sufficient, but neural deep clean is available.",
+                            format!("🧠 4. Deep Clean ({model_label} Optional)"),
+                            "Residual noise is already low. Classical DSP was sufficient, but neural deep clean is available.".to_string(),
                         ),
                         Some(DenoiseDecision::InvokeNeuralBackend) => (
-                            "🧠 4. Deep Clean (AI Recommended)",
-                            "Residual noise detected. Click to run full-band 48 kHz DPDFNet2 neural enhancement.",
+                            format!("🧠 4. Deep Clean ({model_label} Recommended)"),
+                            format!("Residual noise detected. Click to run full-band 48 kHz {} neural enhancement.", self.selected_neural_model.display_name()),
                         ),
                         None => (
-                            "🧠 4. Deep Clean (AI)",
-                            "Click to run full-band 48 kHz DPDFNet2 neural enhancement on vocal audio.",
+                            format!("🧠 4. Deep Clean ({model_label})"),
+                            format!("Click to run full-band 48 kHz {} neural enhancement on vocal audio.", self.selected_neural_model.display_name()),
                         ),
                     };
+
+                    // Neural Model Selector
+                    egui::ComboBox::from_id_salt("neural_model_select")
+                        .selected_text(match self.selected_neural_model {
+                            NeuralModel::Dpdfnet2_48k => "DPDFNet2-48k",
+                            NeuralModel::DeepFilterNet3 => "DeepFilterNet3",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.selected_neural_model,
+                                NeuralModel::Dpdfnet2_48k,
+                                "DPDFNet2-48k (sherpa-onnx)",
+                            );
+                            ui.selectable_value(
+                                &mut self.selected_neural_model,
+                                NeuralModel::DeepFilterNet3,
+                                "DeepFilterNet3 (tract/musl)",
+                            );
+                        });
+
+                    if self.selected_neural_model == NeuralModel::DeepFilterNet3 {
+                        ui.checkbox(&mut self.deepfilter_post_filter, "Post-Filter")
+                            .on_hover_text("Enable DeepFilterNet3 post-filtering for stronger suppression");
+                    }
 
                     let can_ai_clean = !is_recording
                         && !is_calibrating
@@ -1245,7 +1333,7 @@ impl eframe::App for NoiseRemoverApp {
                             RichText::new(if self.is_ai_processing {
                                 "🧠 4. Processing AI..."
                             } else {
-                                ai_btn_text
+                                &ai_btn_text
                             })
                             .size(15.0)
                             .color(if can_ai_clean {
@@ -1375,6 +1463,10 @@ impl eframe::App for NoiseRemoverApp {
                 } else {
                     0.0
                 };
+
+                if self.waveform.is_empty() && !self.player.samples().is_empty() {
+                    self.waveform.update(self.player.samples(), 600);
+                }
 
                 let waveform_response = self.waveform.show(ui, progress, 140.0);
                 if (waveform_response.clicked() || waveform_response.dragged()) && duration > 0.0 {
@@ -1508,8 +1600,8 @@ impl eframe::App for NoiseRemoverApp {
                 if let Some(ref d_rep) = self.denoise_report {
                     ui.add_space(4.0);
                     ui.separator();
-                    ui.label(RichText::new("Neural AI Deep Clean (Phase 6 — DPDFNet2-48k):").strong().color(Color32::from_rgb(168, 85, 247)));
-                    ui.label("• Architecture: Full-Band 48 kHz High-Resolution Dual-Path Neural Network");
+                    ui.label(RichText::new(format!("Neural AI Deep Clean ({}):", d_rep.model_name)).strong().color(Color32::from_rgb(168, 85, 247)));
+                    ui.label("• Architecture: Full-Band 48 kHz High-Resolution Neural Speech & Singing Enhancer");
                     ui.label(format!("• Effective Neural Attenuation: {:.1} dB", d_rep.attenuation_db));
                     ui.label(format!(
                         "• Level Change: {:.1} dBFS -> {:.1} dBFS (Removed Noise RMS: {:.1} dBFS)",
@@ -1520,8 +1612,11 @@ impl eframe::App for NoiseRemoverApp {
                 } else if self.denoiser_available {
                     ui.add_space(4.0);
                     ui.separator();
-                    ui.label(RichText::new("Neural AI Deep Clean (Phase 6):").strong().color(Color32::from_rgb(168, 85, 247)));
-                    ui.label("• Model Status: DPDFNet2-48k Ready (2 threads, CPU-first native ONNX runtime)");
+                    let dpdf_status = if self.dpdfnet_available { "Ready" } else { "Missing" };
+                    let df_status = if self.deepfilter_available { "Ready" } else { "Missing" };
+                    ui.label(RichText::new("Neural AI Deep Clean (Phase 6 & 8 Backends):").strong().color(Color32::from_rgb(168, 85, 247)));
+                    ui.label(format!("• DPDFNet2-48k (sherpa-onnx): {}", dpdf_status));
+                    ui.label(format!("• DeepFilterNet3 (tract/musl): {}", df_status));
                 }
 
                 if let Some(ref pres) = self.dsp_preservation_report {

@@ -5,6 +5,6 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-echo "Running Noise Remover Linux Automated Test Suite (Phases 1 through 7)..."
+echo "Running Noise Remover Linux Automated Test Suite (Phases 1 through 8)..."
 cargo test --manifest-path "$SCRIPT_DIR/Cargo.toml" -- --nocapture "$@"
 

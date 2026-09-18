@@ -40,4 +40,8 @@ path = "phase_6/mod.rs"
 name = "phase_7_tests"
 path = "phase_7/mod.rs"
 
+[[test]]
+name = "phase_8_tests"
+path = "phase_8/mod.rs"
+
 

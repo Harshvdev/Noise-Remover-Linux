@@ -4,5 +4,6 @@ recordings/*.wav
 !recordings/.gitkeep
 models/*.onnx
 !models/.gitkeep
+models/bin/
 tests/target/
 misc/

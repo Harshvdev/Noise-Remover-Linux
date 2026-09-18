@@ -3,6 +3,7 @@ use egui::{Color32, Pos2, Stroke, Ui, Vec2};
 pub struct WaveformRenderer {
     peaks: Vec<(f32, f32)>, // (min, max) per bucket
     sample_count: usize,
+    target_buckets: usize,
     fingerprint: u64,
 }
 
@@ -28,25 +29,33 @@ impl WaveformRenderer {
         Self {
             peaks: Vec::new(),
             sample_count: 0,
+            target_buckets: 0,
             fingerprint: 0,
         }
+    }
+
+    /// Check if waveform is currently empty.
+    pub fn is_empty(&self) -> bool {
+        self.peaks.is_empty()
     }
 
     /// Invalidate and clear cached waveform peaks.
     pub fn clear(&mut self) {
         self.peaks.clear();
         self.sample_count = 0;
+        self.target_buckets = 0;
         self.fingerprint = 0;
     }
 
     /// Recompute peak buckets from audio samples if the buffer content or length changed.
     pub fn update(&mut self, samples: &[f32], target_buckets: usize) {
         let fp = compute_fingerprint(samples);
-        if samples.len() == self.sample_count && self.peaks.len() == target_buckets && self.fingerprint == fp {
+        if samples.len() == self.sample_count && self.target_buckets == target_buckets && self.fingerprint == fp {
             return;
         }
 
         self.sample_count = samples.len();
+        self.target_buckets = target_buckets;
         self.fingerprint = fp;
         self.peaks.clear();
 
@@ -88,35 +97,56 @@ impl WaveformRenderer {
         if ui.is_rect_visible(rect) {
             let painter = ui.painter();
 
-            // Background
-            painter.rect_filled(rect, 4.0, Color32::from_rgb(20, 24, 30));
+            // Background with subtle border
+            painter.rect_filled(rect, 6.0, Color32::from_rgb(15, 23, 42));
+            painter.rect_stroke(
+                rect,
+                6.0,
+                Stroke::new(1.0_f32, Color32::from_rgb(30, 41, 59)),
+                egui::StrokeKind::Inside,
+            );
 
             // Center line
             let mid_y = rect.center().y;
             painter.line_segment(
                 [Pos2::new(rect.left(), mid_y), Pos2::new(rect.right(), mid_y)],
-                Stroke::new(1.0_f32, Color32::from_rgb(45, 55, 72)),
+                Stroke::new(1.0_f32, Color32::from_rgb(51, 65, 85)),
             );
 
             if !self.peaks.is_empty() {
                 let bucket_width = rect.width() / self.peaks.len() as f32;
-                let half_height = rect.height() * 0.45;
+                let half_height = rect.height() * 0.44;
                 let mut shapes = Vec::with_capacity(self.peaks.len() + 1);
 
-                for (i, &(min, max)) in self.peaks.iter().enumerate() {
-                    let x = rect.left() + i as f32 * bucket_width;
-                    let y_top = mid_y - (max.clamp(0.0, 1.0) * half_height);
-                    let y_bottom = mid_y - (min.clamp(-1.0, 0.0) * half_height);
+                // Auto-scale peak gain so low-level recordings remain visually legible
+                let max_peak = self
+                    .peaks
+                    .iter()
+                    .map(|&(min, max)| min.abs().max(max.abs()))
+                    .fold(0.0f32, f32::max);
+                let gain = if max_peak > 0.001 {
+                    (0.85 / max_peak).clamp(1.0, 5.0)
+                } else {
+                    1.0
+                };
 
-                    // Waveform color: cyan played vs muted unplayed
-                    let color = if (x - rect.left()) / rect.width() <= playhead_progress {
-                        Color32::from_rgb(56, 189, 248) // bright blue played
+                for (i, &(min, max)) in self.peaks.iter().enumerate() {
+                    // Center the line stroke within each bucket
+                    let x = rect.left() + (i as f32 + 0.5) * bucket_width;
+                    let bucket_progress = (i as f32 + 0.5) / self.peaks.len() as f32;
+
+                    let y_top = mid_y - ((max * gain).clamp(0.0, 1.0) * half_height);
+                    let y_bottom = mid_y - ((min * gain).clamp(-1.0, 0.0) * half_height);
+
+                    // Waveform color: bright cyan for played portion vs muted slate for unplayed
+                    let color = if bucket_progress <= playhead_progress {
+                        Color32::from_rgb(56, 189, 248) // sky-400 (played)
                     } else {
-                        Color32::from_rgb(71, 85, 105) // muted unplayed
+                        Color32::from_rgb(71, 85, 105) // slate-600 (unplayed)
                     };
 
                     shapes.push(egui::Shape::line_segment(
-                        [Pos2::new(x, y_top), Pos2::new(x, y_bottom.max(y_top + 1.0))],
+                        [Pos2::new(x, y_top), Pos2::new(x, y_bottom.max(y_top + 1.5))],
                         Stroke::new(bucket_width.max(1.0), color),
                     ));
                 }
@@ -124,14 +154,13 @@ impl WaveformRenderer {
                 painter.extend(shapes);
             }
 
-            // Playhead indicator
-            if playhead_progress > 0.0 && playhead_progress <= 1.0 {
-                let playhead_x = rect.left() + playhead_progress * rect.width();
-                painter.line_segment(
-                    [Pos2::new(playhead_x, rect.top()), Pos2::new(playhead_x, rect.bottom())],
-                    Stroke::new(2.0_f32, Color32::from_rgb(244, 63, 94)),
-                );
-            }
+            // Playhead indicator: clean, thin 1.0px needle line
+            let clamped_progress = playhead_progress.clamp(0.0, 1.0);
+            let playhead_x = rect.left() + clamped_progress * rect.width();
+            painter.line_segment(
+                [Pos2::new(playhead_x, rect.top()), Pos2::new(playhead_x, rect.bottom())],
+                Stroke::new(1.0_f32, Color32::from_rgb(244, 63, 94)),
+            );
         }
 
         response
