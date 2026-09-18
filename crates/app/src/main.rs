@@ -10,8 +10,8 @@ use dsp::{
 use eframe::egui::{self, Color32, ProgressBar, RichText, ScrollArea, TopBottomPanel};
 use playback::AudioPlayer;
 use recorder::{AudioRecorder, RecorderMode};
-use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Receiver};
+use std::path::PathBuf;
+use std::sync::mpsc::{channel, Receiver, Sender};
 use waveform::WaveformRenderer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +30,25 @@ impl AudioTab {
     }
 }
 
+enum UploadWorkerMessage {
+    Success {
+        file_name: String,
+        duration_secs: f32,
+        calib_path: PathBuf,
+        rec_path: PathBuf,
+        noise_profile: Box<NoiseProfile>,
+        signal_report: Option<SignalAnalysisReport>,
+    },
+    Error(String),
+}
+
+enum DspWorkerMessage {
+    Success {
+        result: dsp::DspProcessResult,
+    },
+    Error(String),
+}
+
 enum AiWorkerMessage {
     Success {
         cleaned: Vec<f32>,
@@ -46,7 +65,6 @@ struct NoiseRemoverApp {
     analyzer: Option<NoiseAnalyzer>,
     noise_profile: Option<NoiseProfile>,
     signal_report: Option<SignalAnalysisReport>,
-    dsp_processor: Option<DspProcessor>,
     dsp_report: Option<DspProcessingReport>,
     residual_report: Option<ResidualReport>,
     denoiser_available: bool,
@@ -54,7 +72,14 @@ struct NoiseRemoverApp {
     denoise_report: Option<DenoiseReport>,
     is_ai_processing: bool,
     ai_rx: Option<Receiver<AiWorkerMessage>>,
+    is_uploading: bool,
+    upload_rx: Option<Receiver<UploadWorkerMessage>>,
+    is_dsp_processing: bool,
+    dsp_rx: Option<Receiver<DspWorkerMessage>>,
     dsp_intensity: DspIntensity,
+    dsp_preservation_report: Option<dsp::PreservationReport>,
+    adaptive_preservation: bool,
+    manual_preservation_alpha: f32,
     devices: Vec<(usize, String)>,
     selected_device_idx: usize,
     active_tab: AudioTab,
@@ -107,7 +132,6 @@ impl NoiseRemoverApp {
             analyzer: NoiseAnalyzer::new(48000).ok(),
             noise_profile: None,
             signal_report: None,
-            dsp_processor: DspProcessor::new(48000).ok(),
             dsp_report: None,
             residual_report: None,
             denoiser_available: {
@@ -132,7 +156,14 @@ impl NoiseRemoverApp {
             denoise_report: None,
             is_ai_processing: false,
             ai_rx: None,
+            is_uploading: false,
+            upload_rx: None,
+            is_dsp_processing: false,
+            dsp_rx: None,
             dsp_intensity: DspIntensity::Balanced,
+            dsp_preservation_report: None,
+            adaptive_preservation: true,
+            manual_preservation_alpha: 0.85,
             devices,
             selected_device_idx: selected_idx,
             active_tab: AudioTab::Original,
@@ -143,6 +174,7 @@ impl NoiseRemoverApp {
             active_capture_mode: None,
         };
         app.run_dsp_analysis();
+        app.reload_active_audio();
         app
     }
 
@@ -232,9 +264,13 @@ impl NoiseRemoverApp {
         PathBuf::from("recordings/removed_deep_noise.wav")
     }
 
-    fn run_dsp_cleaning(&mut self) {
+    fn run_dsp_cleaning(&mut self, ctx: &egui::Context) {
+        if self.is_dsp_processing {
+            return;
+        }
+
         let profile = match self.noise_profile.as_ref() {
-            Some(p) => p,
+            Some(p) => p.clone(),
             None => {
                 self.status_message = "Please calibrate noise reference first.".into();
                 return;
@@ -242,7 +278,7 @@ impl NoiseRemoverApp {
         };
 
         let rec_path = match self.recorder.last_recording_path() {
-            Some(p) if p.exists() => p,
+            Some(p) if p.exists() => p.clone(),
             _ => {
                 self.status_message = "No voice recording found. Record voice first!".into();
                 return;
@@ -257,70 +293,48 @@ impl NoiseRemoverApp {
             }
         };
 
-        let processor = match self.dsp_processor.as_ref() {
-            Some(p) => p,
-            None => {
-                self.status_message = "DSP processor not initialized.".into();
-                return;
-            }
-        };
-
-        let config = self.dsp_intensity.to_config();
-        let activity = self.signal_report.as_ref().map(|r| &r.activity);
-
-        match processor.process(&samples, profile, activity, &config) {
-            Ok(result) => {
-                let cleaned_path = self.dsp_cleaned_path();
-                let noise_path = self.removed_noise_path();
-
-                if let Err(e) =
-                    audio_core::write_wav_f32(&cleaned_path, &result.cleaned_samples, 48000, 1)
-                {
-                    self.status_message = format!("Failed to write dsp_cleaned.wav: {}", e);
-                    return;
-                }
-
-                if let Err(e) =
-                    audio_core::write_wav_f32(&noise_path, &result.removed_noise_samples, 48000, 1)
-                {
-                    self.status_message = format!("Failed to write removed_noise.wav: {}", e);
-                    return;
-                }
-
-                // Invalidate subsequent Phase 6 deep clean results
-                self.denoise_report = None;
-                let _ = std::fs::remove_file(self.deep_cleaned_path());
-                let _ = std::fs::remove_file(self.removed_deep_noise_path());
-
-                let att = result.report.attenuation_db;
-                let ms = result.report.processing_time_ms;
-                let notches = result.report.notched_frequencies.clone();
-                let res_level = result.residual.level;
-                let res_decision = result.residual.decision;
-                log::info!("[INFO] DSP residual: {}", res_level.as_str());
-                log::info!("[INFO] DSP decision: {}", res_decision.as_str());
-
-                self.dsp_report = Some(result.report);
-                self.residual_report = Some(result.residual);
-                self.active_tab = AudioTab::DspCleaned;
-                self.reload_active_audio_seamless(true);
-
-                let notch_msg = if notches.is_empty() {
-                    String::new()
-                } else {
-                    let freqs_str: Vec<String> =
-                        notches.iter().map(|f| format!("{:.1} Hz", f)).collect();
-                    format!(" (Hum notched: {})", freqs_str.join(", "))
-                };
-                self.status_message = format!(
-                    "DSP cleaning complete: {:.1} dB noise reduction in {:.0} ms! Residual: {} -> {}{}",
-                    att, ms, res_level.as_str(), res_decision.as_str(), notch_msg
-                );
-            }
-            Err(e) => {
-                self.status_message = format!("DSP processing failed: {}", e);
-            }
+        let mut config = self.dsp_intensity.to_config();
+        if !self.adaptive_preservation {
+            config.preservation = dsp::PreservationMode::Global(self.manual_preservation_alpha);
         }
+        let activity = self.signal_report.as_ref().map(|r| r.activity.clone());
+
+        self.is_dsp_processing = true;
+        self.status_message = "⚡ Running classical DSP cleaning & harmonic preservation...".into();
+
+        let (tx, rx) = channel();
+        self.dsp_rx = Some(rx);
+
+        let cleaned_path = self.dsp_cleaned_path();
+        let noise_path = self.removed_noise_path();
+        let ctx_clone = ctx.clone();
+
+        std::thread::spawn(move || {
+            let processor = match DspProcessor::new(48000) {
+                Ok(p) => p,
+                Err(e) => {
+                    tx.send(DspWorkerMessage::Error(format!("DSP processor error: {}", e))).ok();
+                    ctx_clone.request_repaint();
+                    return;
+                }
+            };
+
+            match processor.process(&samples, &profile, activity.as_ref(), &config) {
+                Ok(result) => {
+                    if let Err(e) = audio_core::write_wav_f32(&cleaned_path, &result.cleaned_samples, 48000, 1) {
+                        tx.send(DspWorkerMessage::Error(format!("Failed to write dsp_cleaned.wav: {}", e))).ok();
+                    } else if let Err(e) = audio_core::write_wav_f32(&noise_path, &result.removed_noise_samples, 48000, 1) {
+                        tx.send(DspWorkerMessage::Error(format!("Failed to write removed_noise.wav: {}", e))).ok();
+                    } else {
+                        tx.send(DspWorkerMessage::Success { result }).ok();
+                    }
+                }
+                Err(e) => {
+                    tx.send(DspWorkerMessage::Error(format!("DSP processing failed: {}", e))).ok();
+                }
+            }
+            ctx_clone.request_repaint();
+        });
     }
 
     fn run_deep_cleaning(&mut self) {
@@ -367,7 +381,11 @@ impl NoiseRemoverApp {
         let (tx, rx) = channel();
         self.ai_rx = Some(rx);
 
-        let config = self.denoiser_config.clone();
+        let mut config = self.denoiser_config.clone();
+        if !self.adaptive_preservation {
+            config.preservation = dsp::PreservationMode::Global(self.manual_preservation_alpha);
+        }
+        let activity = self.signal_report.as_ref().map(|r| r.activity.clone());
         std::thread::spawn(move || {
             let mut denoiser = match DpdfnetDenoiser::new(config) {
                 Ok(d) => d,
@@ -376,7 +394,7 @@ impl NoiseRemoverApp {
                     return;
                 }
             };
-            match denoiser.denoise_with_report(&samples) {
+            match denoiser.denoise_with_activity(&samples, activity.as_ref()) {
                 Ok((cleaned, removed, report)) => {
                     let _ = tx.send(AiWorkerMessage::Success {
                         cleaned,
@@ -421,14 +439,74 @@ impl NoiseRemoverApp {
         }
     }
 
-    fn upload_audio_file(&mut self, path: &Path) {
+    fn start_upload_file_dialog(&mut self, ctx: &egui::Context) {
+        if self.is_uploading {
+            return;
+        }
         self.player.stop();
+        self.is_uploading = true;
+        self.status_message = "Opening file chooser...".into();
+
+        let (tx, rx) = channel();
+        self.upload_rx = Some(rx);
+
+        let ctx_clone = ctx.clone();
+        std::thread::spawn(move || {
+            let file_opt = rfd::FileDialog::new()
+                .add_filter(
+                    "Audio Files",
+                    &[
+                        "wav", "mp3", "flac", "ogg", "m4a", "aac", "opus", "WAV", "MP3",
+                        "FLAC", "OGG", "M4A",
+                    ],
+                )
+                .set_title("Select Audio File (First 2s = Noise Reference)")
+                .pick_file();
+
+            if let Some(path) = file_opt {
+                Self::process_uploaded_file_worker(path, tx);
+            } else {
+                tx.send(UploadWorkerMessage::Error("File selection cancelled.".into()))
+                    .ok();
+            }
+            ctx_clone.request_repaint();
+        });
+    }
+
+    fn start_async_upload_path(&mut self, path: PathBuf, ctx: &egui::Context) {
+        if self.is_uploading {
+            return;
+        }
+        self.player.stop();
+        self.is_uploading = true;
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "audio file".into());
+        self.status_message = format!("Loading '{}'...", file_name);
+
+        let (tx, rx) = channel();
+        self.upload_rx = Some(rx);
+
+        let ctx_clone = ctx.clone();
+        std::thread::spawn(move || {
+            Self::process_uploaded_file_worker(path, tx);
+            ctx_clone.request_repaint();
+        });
+    }
+
+    fn process_uploaded_file_worker(path: PathBuf, tx: Sender<UploadWorkerMessage>) {
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "audio file".into());
 
         // 1. Load canonical 48kHz mono float samples
-        let samples = match audio_core::load_audio_canonical_48k(path) {
+        let samples = match audio_core::load_audio_canonical_48k(&path) {
             Ok(s) => s,
             Err(e) => {
-                self.status_message = format!("Failed to load audio: {}", e);
+                tx.send(UploadWorkerMessage::Error(format!("Failed to load audio: {}", e)))
+                    .ok();
                 return;
             }
         };
@@ -437,10 +515,11 @@ impl NoiseRemoverApp {
         let min_samples = 48000 * 2;
         if samples.len() < min_samples {
             let dur = samples.len() as f32 / 48000.0;
-            self.status_message = format!(
+            tx.send(UploadWorkerMessage::Error(format!(
                 "Uploaded audio is too short ({:.1}s). It must be at least 2.0s to extract noise reference.",
                 dur
-            );
+            )))
+            .ok();
             return;
         }
 
@@ -448,48 +527,50 @@ impl NoiseRemoverApp {
         let noise_samples = &samples[..min_samples];
         let calib_path = PathBuf::from("recordings/noise_reference.wav");
         if let Err(e) = audio_core::write_wav_f32(&calib_path, noise_samples, 48000, 1) {
-            self.status_message = format!("Failed to save noise reference: {}", e);
+            tx.send(UploadWorkerMessage::Error(format!("Failed to save noise reference: {}", e)))
+                .ok();
             return;
         }
 
         // 4. Save entire audio take as original.wav
         let rec_path = PathBuf::from("recordings/original.wav");
         if let Err(e) = audio_core::write_wav_f32(&rec_path, &samples, 48000, 1) {
-            self.status_message = format!("Failed to save original recording: {}", e);
+            tx.send(UploadWorkerMessage::Error(format!("Failed to save original recording: {}", e)))
+                .ok();
             return;
         }
 
-        // 5. Update recorder paths
-        self.recorder.set_last_calibration_path(&calib_path);
-        self.recorder.set_last_recording_path(&rec_path);
+        // 5. Run DSP analysis (noise profile + vocal activity)
+        let analyzer = match NoiseAnalyzer::new(48000) {
+            Ok(a) => a,
+            Err(e) => {
+                tx.send(UploadWorkerMessage::Error(format!("Analyzer error: {}", e)))
+                    .ok();
+                return;
+            }
+        };
 
-        // 6. Invalidate previous DSP and AI results
-        self.signal_report = None;
-        self.dsp_report = None;
-        self.residual_report = None;
-        self.denoise_report = None;
-        self.waveform.clear();
-        let _ = std::fs::remove_file(self.dsp_cleaned_path());
-        let _ = std::fs::remove_file(self.removed_noise_path());
-        let _ = std::fs::remove_file(self.deep_cleaned_path());
-        let _ = std::fs::remove_file(self.removed_deep_noise_path());
+        let profile = match analyzer.analyze_noise_reference(noise_samples) {
+            Ok(p) => p,
+            Err(e) => {
+                tx.send(UploadWorkerMessage::Error(format!("Noise profile analysis failed: {}", e)))
+                    .ok();
+                return;
+            }
+        };
 
-        // 7. Run DSP analysis (noise profile from 2s reference + signal report from full take)
-        self.run_dsp_analysis();
+        let signal_report = analyzer.analyze_signal(&samples, &profile).ok();
+        let duration_secs = samples.len() as f32 / 48000.0;
 
-        // 8. Set active tab to original and load into player
-        self.active_tab = AudioTab::Original;
-        self.reload_active_audio();
-
-        let total_secs = samples.len() as f32 / 48000.0;
-        let file_name = path
-            .file_name()
-            .map(|n| n.to_string_lossy())
-            .unwrap_or_else(|| "audio file".into());
-        self.status_message = format!(
-            "Uploaded '{}' ({:.1}s). First 2.0s calibrated as noise reference. Ready to clean!",
-            file_name, total_secs
-        );
+        tx.send(UploadWorkerMessage::Success {
+            file_name,
+            duration_secs,
+            calib_path,
+            rec_path,
+            noise_profile: Box::new(profile),
+            signal_report,
+        })
+        .ok();
     }
 }
 
@@ -497,11 +578,110 @@ impl eframe::App for NoiseRemoverApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Check for drag-and-drop audio files dropped onto the application window
         let dropped_files = ctx.input(|i| i.raw.dropped_files.clone());
-        if !dropped_files.is_empty() {
+        if !dropped_files.is_empty() && !self.is_uploading && !self.is_dsp_processing && !self.is_ai_processing {
             for file in dropped_files {
                 if let Some(path) = file.path {
-                    self.upload_audio_file(&path);
+                    self.start_async_upload_path(path, ctx);
                     break;
+                }
+            }
+        }
+
+        // Poll for asynchronous audio file upload completion
+        if let Some(ref rx) = self.upload_rx {
+            match rx.try_recv() {
+                Ok(UploadWorkerMessage::Success {
+                    file_name,
+                    duration_secs,
+                    calib_path,
+                    rec_path,
+                    noise_profile,
+                    signal_report,
+                }) => {
+                    self.recorder.set_last_calibration_path(&calib_path);
+                    self.recorder.set_last_recording_path(&rec_path);
+
+                    // Invalidate previous DSP and AI results
+                    self.dsp_report = None;
+                    self.residual_report = None;
+                    self.denoise_report = None;
+                    self.dsp_preservation_report = None;
+                    self.waveform.clear();
+                    let _ = std::fs::remove_file(self.dsp_cleaned_path());
+                    let _ = std::fs::remove_file(self.removed_noise_path());
+                    let _ = std::fs::remove_file(self.deep_cleaned_path());
+                    let _ = std::fs::remove_file(self.removed_deep_noise_path());
+
+                    self.noise_profile = Some(*noise_profile);
+                    self.signal_report = signal_report;
+
+                    self.active_tab = AudioTab::Original;
+                    self.reload_active_audio();
+
+                    self.status_message = format!(
+                        "Uploaded '{}' ({:.1}s). First 2.0s calibrated as noise reference. Ready to clean!",
+                        file_name, duration_secs
+                    );
+                    self.is_uploading = false;
+                    self.upload_rx = None;
+                }
+                Ok(UploadWorkerMessage::Error(e)) => {
+                    self.status_message = format!("Upload failed: {}", e);
+                    self.is_uploading = false;
+                    self.upload_rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.is_uploading = false;
+                    self.upload_rx = None;
+                }
+            }
+        }
+
+        // Poll for asynchronous DSP cleaning completion
+        if let Some(ref rx) = self.dsp_rx {
+            match rx.try_recv() {
+                Ok(DspWorkerMessage::Success { result }) => {
+                    // Invalidate subsequent Phase 6 deep clean results
+                    self.denoise_report = None;
+                    let _ = std::fs::remove_file(self.deep_cleaned_path());
+                    let _ = std::fs::remove_file(self.removed_deep_noise_path());
+
+                    let att = result.report.attenuation_db;
+                    let ms = result.report.processing_time_ms;
+                    let notches = result.report.notched_frequencies.clone();
+                    let res_level = result.residual.level;
+                    let res_decision = result.residual.decision;
+
+                    self.dsp_report = Some(result.report);
+                    self.residual_report = Some(result.residual);
+                    self.dsp_preservation_report = Some(result.preservation);
+                    self.active_tab = AudioTab::DspCleaned;
+                    self.reload_active_audio_seamless(true);
+
+                    let notch_msg = if notches.is_empty() {
+                        String::new()
+                    } else {
+                        let freqs_str: Vec<String> =
+                            notches.iter().map(|f| format!("{:.1} Hz", f)).collect();
+                        format!(" (Hum notched: {})", freqs_str.join(", "))
+                    };
+                    self.status_message = format!(
+                        "DSP cleaning complete: {:.1} dB noise reduction in {:.0} ms! Residual: {} -> {}{}",
+                        att, ms, res_level.as_str(), res_decision.as_str(), notch_msg
+                    );
+                    self.is_dsp_processing = false;
+                    self.dsp_rx = None;
+                }
+                Ok(DspWorkerMessage::Error(e)) => {
+                    self.status_message = e;
+                    self.is_dsp_processing = false;
+                    self.dsp_rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.is_dsp_processing = false;
+                    self.dsp_rx = None;
                 }
             }
         }
@@ -571,6 +751,7 @@ impl eframe::App for NoiseRemoverApp {
                 self.dsp_report = None;
                 self.residual_report = None;
                 self.denoise_report = None;
+                self.dsp_preservation_report = None;
                 let _ = std::fs::remove_file(self.dsp_cleaned_path());
                 let _ = std::fs::remove_file(self.removed_noise_path());
                 let _ = std::fs::remove_file(self.deep_cleaned_path());
@@ -588,6 +769,7 @@ impl eframe::App for NoiseRemoverApp {
                 self.dsp_report = None;
                 self.residual_report = None;
                 self.denoise_report = None;
+                self.dsp_preservation_report = None;
                 let _ = std::fs::remove_file(self.dsp_cleaned_path());
                 let _ = std::fs::remove_file(self.removed_noise_path());
                 let _ = std::fs::remove_file(self.deep_cleaned_path());
@@ -600,11 +782,13 @@ impl eframe::App for NoiseRemoverApp {
             }
         }
 
-        // Request continuous repaint while recording, calibrating, saving, playing, or running AI inference
+        // Request continuous repaint while recording, calibrating, saving, playing, uploading, or running AI/DSP inference
         if status.mode != RecorderMode::Idle
             || status.is_saving
             || self.player.is_playing()
             || self.is_ai_processing
+            || self.is_dsp_processing
+            || self.is_uploading
         {
             ctx.request_repaint();
         } else {
@@ -655,6 +839,11 @@ impl eframe::App for NoiseRemoverApp {
                                 .color(Color32::from_rgb(56, 189, 248)),
                         );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let is_max = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+                    let max_label = if is_max { "🗗 Restore" } else { "🗖 Maximize" };
+                    if ui.small_button(max_label).on_hover_text("Toggle window maximize / restore").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_max));
+                    }
                     ui.label(
                         RichText::new("Offline · CPU-first · 48 kHz")
                             .small()
@@ -921,31 +1110,34 @@ impl eframe::App for NoiseRemoverApp {
                     let can_upload = !is_recording
                         && !is_calibrating
                         && !status.is_saving
-                        && !self.is_ai_processing;
+                        && !self.is_ai_processing
+                        && !self.is_dsp_processing
+                        && !self.is_uploading;
 
                     let upload_btn = ui.add_enabled(
                         can_upload,
                         egui::Button::new(
                             RichText::new("📁 Upload Audio")
                                 .size(15.0)
-                                .color(Color32::from_rgb(56, 189, 248)),
+                                .color(if can_upload {
+                                    Color32::from_rgb(56, 189, 248)
+                                } else {
+                                    Color32::from_rgb(100, 116, 139)
+                                }),
                         ),
                     ).on_hover_text("Upload an audio file (WAV, MP3, FLAC, OGG, M4A, etc.). The first 2 seconds are calibrated as background noise reference.");
 
                     if upload_btn.clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter(
-                                "Audio Files",
-                                &[
-                                    "wav", "mp3", "flac", "ogg", "m4a", "aac", "opus", "WAV",
-                                    "MP3", "FLAC", "OGG", "M4A",
-                                ],
-                            )
-                            .set_title("Select Audio File (First 2s = Noise Reference)")
-                            .pick_file()
-                        {
-                            self.upload_audio_file(&path);
-                        }
+                        self.start_upload_file_dialog(ctx);
+                    }
+
+                    if self.is_uploading {
+                        ui.spinner();
+                        ui.label(
+                            RichText::new("📁 Loading audio...")
+                                .color(Color32::from_rgb(56, 189, 248))
+                                .strong(),
+                        );
                     }
 
                     ui.separator();
@@ -954,6 +1146,9 @@ impl eframe::App for NoiseRemoverApp {
                     let can_clean = !is_recording
                         && !is_calibrating
                         && !status.is_saving
+                        && !self.is_uploading
+                        && !self.is_dsp_processing
+                        && !self.is_ai_processing
                         && self.noise_profile.is_some()
                         && self
                             .recorder
@@ -964,17 +1159,30 @@ impl eframe::App for NoiseRemoverApp {
                     let clean_btn = ui.add_enabled(
                         can_clean,
                         egui::Button::new(
-                            RichText::new("⚡ 3. Clean Noise (DSP)")
-                                .size(15.0)
-                                .color(if can_clean {
-                                    Color32::from_rgb(52, 211, 153)
-                                } else {
-                                    Color32::from_rgb(100, 116, 139)
-                                }),
+                            RichText::new(if self.is_dsp_processing {
+                                "⚡ Cleaning..."
+                            } else {
+                                "⚡ 3. Clean Noise (DSP)"
+                            })
+                            .size(15.0)
+                            .color(if can_clean {
+                                Color32::from_rgb(52, 211, 153)
+                            } else {
+                                Color32::from_rgb(100, 116, 139)
+                            }),
                         ),
                     );
                     if clean_btn.clicked() {
-                        self.run_dsp_cleaning();
+                        self.run_dsp_cleaning(ctx);
+                    }
+
+                    if self.is_dsp_processing {
+                        ui.spinner();
+                        ui.label(
+                            RichText::new("⚡ DSP Cleaning...")
+                                .color(Color32::from_rgb(52, 211, 153))
+                                .strong(),
+                        );
                     }
 
                     // DSP Intensity Preset Selector
@@ -985,6 +1193,21 @@ impl eframe::App for NoiseRemoverApp {
                             ui.selectable_value(&mut self.dsp_intensity, DspIntensity::Balanced, DspIntensity::Balanced.as_str());
                             ui.selectable_value(&mut self.dsp_intensity, DspIntensity::Aggressive, DspIntensity::Aggressive.as_str());
                         });
+
+                    ui.separator();
+
+                    // Phase 7 Preservation Layer Controls
+                    ui.checkbox(&mut self.adaptive_preservation, "🛡 Vocal Safe")
+                        .on_hover_text("Phase 7 Preservation Layer: Protects vocal harmonics and subtle timbre, preventing comb-filtering and phasing artifacts.");
+
+                    if !self.adaptive_preservation {
+                        ui.add(
+                            egui::Slider::new(&mut self.manual_preservation_alpha, 0.0..=1.0)
+                                .text("Alpha")
+                                .show_value(true),
+                        )
+                        .on_hover_text("Manual preservation blend: 0.0 = 100% Original, 1.0 = 100% Processed");
+                    }
 
                     // 4. Phase 6 AI Deep Clean
                     let (ai_btn_text, ai_tooltip) = match self.residual_report.as_ref().map(|r| r.decision) {
@@ -1006,6 +1229,8 @@ impl eframe::App for NoiseRemoverApp {
                         && !is_calibrating
                         && !status.is_saving
                         && !self.is_ai_processing
+                        && !self.is_dsp_processing
+                        && !self.is_uploading
                         && self.denoiser_available
                         && (self.dsp_cleaned_path().exists()
                             || self
@@ -1298,6 +1523,22 @@ impl eframe::App for NoiseRemoverApp {
                     ui.label(RichText::new("Neural AI Deep Clean (Phase 6):").strong().color(Color32::from_rgb(168, 85, 247)));
                     ui.label("• Model Status: DPDFNet2-48k Ready (2 threads, CPU-first native ONNX runtime)");
                 }
+
+                if let Some(ref pres) = self.dsp_preservation_report {
+                    ui.add_space(4.0);
+                    ui.separator();
+                    ui.label(RichText::new("Preservation Layer (Phase 7):").strong().color(Color32::from_rgb(56, 189, 248)));
+                    ui.label(format!("• Vocal Energy Preserved: {:.1}%", pres.vocal_preservation_percentage));
+                    ui.label(format!("• Vocal Leakage Attenuation: {:.1} dB in removed noise", pres.vocal_leakage_attenuation_db));
+                    ui.label(format!("• Mean Blending Alpha: {:.2}", pres.mean_alpha));
+                    let comb_text = if pres.comb_metrics.has_comb_filtering {
+                        "⚠ Comb-filtering detected"
+                    } else {
+                        "✓ None (Constructive phase-coherent mix)"
+                    };
+                    ui.label(format!("• Phasing & Comb Filtering: {}", comb_text));
+                    ui.label(format!("• Delay Compensation: {} samples ({:.1} ms)", pres.latency_samples, pres.latency_ms));
+                }
             });
             ui.add_space(8.0);
         });
@@ -1312,7 +1553,9 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title("Offline Voice & Singing Noise Remover")
             .with_inner_size([920.0, 680.0])
-            .with_min_inner_size([680.0, 500.0]),
+            .with_min_inner_size([680.0, 500.0])
+            .with_resizable(true)
+            .with_maximize_button(true),
         ..Default::default()
     };
 

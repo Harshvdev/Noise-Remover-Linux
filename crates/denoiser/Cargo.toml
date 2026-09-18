@@ -5,6 +5,8 @@ edition = "2021"
 
 [dependencies]
 audio-core = { workspace = true }
+dsp = { workspace = true }
 sherpa-onnx = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
+

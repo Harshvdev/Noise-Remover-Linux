@@ -1067,6 +1067,7 @@ name = "denoiser"
 version = "0.1.0"
 dependencies = [
  "audio-core",
+ "dsp",
  "log",
  "sherpa-onnx",
  "thiserror 2.0.20",

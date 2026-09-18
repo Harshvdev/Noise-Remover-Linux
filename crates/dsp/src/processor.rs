@@ -19,6 +19,9 @@ use crate::error::DspError;
 use crate::mask::{MaskSmoother, MaskSmootherConfig};
 use crate::noise_profile::NoiseProfile;
 use crate::notch::TonalNotchFilter;
+use crate::preservation::{
+    AdaptivePreservationConfig, PreservationLayer, PreservationMode, PreservationReport,
+};
 use crate::residual::{analyze_residual, ResidualReport};
 use crate::stft::{Spectrogram, StftEngine};
 use crate::wiener::{WienerConfig, WienerSuppressor};
@@ -58,6 +61,13 @@ impl DspIntensity {
                     vocal_protection: true,
                 },
                 mask_smoothing: MaskSmootherConfig::default(),
+                preservation: PreservationMode::Adaptive(AdaptivePreservationConfig {
+                    base_alpha: 1.0,
+                    min_vocal_alpha: 0.65,
+                    vocal_protection_strength: 0.85,
+                    harmonic_protection_strength: 0.90,
+                    ..AdaptivePreservationConfig::default()
+                }),
             },
             Self::Balanced => DspConfig {
                 enable_dc_blocker: true,
@@ -71,6 +81,13 @@ impl DspIntensity {
                     vocal_protection: true,
                 },
                 mask_smoothing: MaskSmootherConfig::default(),
+                preservation: PreservationMode::Adaptive(AdaptivePreservationConfig {
+                    base_alpha: 1.0,
+                    min_vocal_alpha: 0.75,
+                    vocal_protection_strength: 0.80,
+                    harmonic_protection_strength: 0.85,
+                    ..AdaptivePreservationConfig::default()
+                }),
             },
             Self::Aggressive => DspConfig {
                 enable_dc_blocker: true,
@@ -88,6 +105,13 @@ impl DspIntensity {
                     release_factor: 0.35,
                     center_weight: 0.65,
                 },
+                preservation: PreservationMode::Adaptive(AdaptivePreservationConfig {
+                    base_alpha: 1.0,
+                    min_vocal_alpha: 0.88,
+                    vocal_protection_strength: 0.70,
+                    harmonic_protection_strength: 0.75,
+                    ..AdaptivePreservationConfig::default()
+                }),
             },
         }
     }
@@ -108,6 +132,8 @@ pub struct DspConfig {
     pub wiener: WienerConfig,
     /// 2D mask smoothing settings.
     pub mask_smoothing: MaskSmootherConfig,
+    /// Preservation layer blending settings (Phase 7).
+    pub preservation: PreservationMode,
 }
 
 impl Default for DspConfig {
@@ -143,6 +169,8 @@ pub struct DspProcessResult {
     pub report: DspProcessingReport,
     /// Post-DSP residual noise evaluation and AI dispatch decision (Phase 5).
     pub residual: ResidualReport,
+    /// Phase 7 Preservation layer report.
+    pub preservation: PreservationReport,
 }
 
 /// Classical DSP Noise Removal Pipeline.
@@ -185,6 +213,18 @@ impl DspProcessor {
                     processing_time_ms: 0.0,
                 },
                 residual,
+                preservation: PreservationReport {
+                    mean_alpha: 1.0,
+                    latency_samples: 0,
+                    latency_ms: 0.0,
+                    comb_metrics: crate::latency::CombFilterMetrics {
+                        notch_depth_db: 0.0,
+                        has_comb_filtering: false,
+                        phase_coherence: 1.0,
+                    },
+                    vocal_leakage_attenuation_db: 100.0,
+                    vocal_preservation_percentage: 100.0,
+                },
             });
         }
 
@@ -274,22 +314,31 @@ impl DspProcessor {
             removed_noise_samples.resize(input_samples.len(), 0.0);
         }
 
-        // 7. Performance metrics
-        let cleaned_rms = (cleaned_samples.iter().map(|&s| s * s).sum::<f32>() / cleaned_samples.len() as f32).sqrt();
+        // 7. Phase 7: Preservation Layer Orchestration (Latency Alignment, Harmonic & Vocal Protection Blending, Aligned Dual-Synthesis)
+        let preservation_layer = PreservationLayer::new(self.sample_rate, config.preservation.clone());
+        let (final_cleaned, final_removed_noise, preservation_report) = preservation_layer.process(
+            &preprocessed,
+            &cleaned_samples,
+            0, // STFT synthesis is zero-latency
+            activity,
+        );
+
+        // 8. Performance metrics on preserved output
+        let cleaned_rms = (final_cleaned.iter().map(|&s| s * s).sum::<f32>() / final_cleaned.len().max(1) as f32).sqrt();
         let cleaned_rms_dbfs = 20.0 * (cleaned_rms.max(1e-12)).log10();
 
-        let removed_rms = (removed_noise_samples.iter().map(|&s| s * s).sum::<f32>() / removed_noise_samples.len() as f32).sqrt();
+        let removed_rms = (final_removed_noise.iter().map(|&s| s * s).sum::<f32>() / final_removed_noise.len().max(1) as f32).sqrt();
         let removed_noise_rms_dbfs = 20.0 * (removed_rms.max(1e-12)).log10();
 
         let attenuation_db = (input_rms_dbfs - cleaned_rms_dbfs).max(0.0);
         let processing_time_ms = start_time.elapsed().as_secs_f32() * 1000.0;
 
-        // 8. Phase 5: Post-DSP Residual Noise Analysis & AI Dispatch Decision
-        let residual = analyze_residual(&cleaned_samples, noise_profile, activity, self.sample_rate)?;
+        // 9. Phase 5: Post-DSP Residual Noise Analysis & AI Dispatch Decision
+        let residual = analyze_residual(&final_cleaned, noise_profile, activity, self.sample_rate)?;
 
         Ok(DspProcessResult {
-            cleaned_samples,
-            removed_noise_samples,
+            cleaned_samples: final_cleaned,
+            removed_noise_samples: final_removed_noise,
             report: DspProcessingReport {
                 input_rms_dbfs,
                 cleaned_rms_dbfs,
@@ -299,7 +348,9 @@ impl DspProcessor {
                 processing_time_ms,
             },
             residual,
+            preservation: preservation_report,
         })
+
     }
 }
 

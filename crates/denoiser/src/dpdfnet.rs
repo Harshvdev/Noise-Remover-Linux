@@ -23,6 +23,8 @@ pub struct DpdfnetConfig {
     pub num_threads: i32,
     /// Maximum noise attenuation limit in dB (0.0 = unlimited, default).
     pub attenuation_limit_db: f32,
+    /// Preservation layer blending settings (Phase 7).
+    pub preservation: dsp::PreservationMode,
 }
 
 impl Default for DpdfnetConfig {
@@ -32,6 +34,7 @@ impl Default for DpdfnetConfig {
             model_path,
             num_threads: 2,
             attenuation_limit_db: 0.0,
+            preservation: dsp::PreservationMode::Adaptive(dsp::AdaptivePreservationConfig::default()),
         }
     }
 }
@@ -101,7 +104,19 @@ impl DpdfnetDenoiser {
     }
 
     /// Denoise audio samples and generate a comprehensive diagnostic report.
-    pub fn denoise_with_report(&mut self, input: &[f32]) -> Result<(Vec<f32>, Vec<f32>, DenoiseReport), DenoiserError> {
+    pub fn denoise_with_report(
+        &mut self,
+        input: &[f32],
+    ) -> Result<(Vec<f32>, Vec<f32>, DenoiseReport), DenoiserError> {
+        self.denoise_with_activity(input, None)
+    }
+
+    /// Denoise audio samples with vocal activity guidance and generate a diagnostic report.
+    pub fn denoise_with_activity(
+        &mut self,
+        input: &[f32],
+        activity: Option<&dsp::ActivityReport>,
+    ) -> Result<(Vec<f32>, Vec<f32>, DenoiseReport), DenoiserError> {
         let start_time = Instant::now();
         let cleaned = self.process(input)?;
         let elapsed_ms = start_time.elapsed().as_secs_f32() * 1000.0;
@@ -109,20 +124,23 @@ impl DpdfnetDenoiser {
         let duration_sec = input.len() as f32 / 48000.0;
         let rtf = (elapsed_ms / 1000.0) / duration_sec.max(0.001);
 
-        // Compute dual-synthesis removed noise: original minus cleaned
-        let removed_noise: Vec<f32> = input
-            .iter()
-            .zip(cleaned.iter())
-            .map(|(&orig, &clean)| orig - clean)
-            .collect();
+        let latency_samples = self.latency_samples();
+        let latency_ms = (latency_samples as f32 / self.sample_rate() as f32) * 1000.0;
+
+        // Phase 7: Preservation Layer with Latency Alignment & Aligned Dual Synthesis
+        let preservation_layer =
+            dsp::PreservationLayer::new(self.sample_rate(), self.config.preservation.clone());
+
+        let (final_cleaned, removed_noise, pres_rep) =
+            preservation_layer.process(input, &cleaned, latency_samples, activity);
 
         let in_power = if !input.is_empty() {
             input.iter().map(|&s| s * s).sum::<f32>() / input.len() as f32
         } else {
             1e-12
         };
-        let out_power = if !cleaned.is_empty() {
-            cleaned.iter().map(|&s| s * s).sum::<f32>() / cleaned.len() as f32
+        let out_power = if !final_cleaned.is_empty() {
+            final_cleaned.iter().map(|&s| s * s).sum::<f32>() / final_cleaned.len() as f32
         } else {
             1e-12
         };
@@ -137,9 +155,6 @@ impl DpdfnetDenoiser {
         let removed_noise_rms_dbfs = 20.0 * noise_power.max(1e-12).sqrt().log10();
         let attenuation_db = (input_rms_dbfs - cleaned_rms_dbfs).max(0.0);
 
-        let latency_samples = self.latency_samples();
-        let latency_ms = (latency_samples as f32 / self.sample_rate() as f32) * 1000.0;
-
         let report = DenoiseReport {
             model_name: self.name(),
             sample_rate: self.sample_rate(),
@@ -152,9 +167,11 @@ impl DpdfnetDenoiser {
             cleaned_rms_dbfs,
             removed_noise_rms_dbfs,
             attenuation_db,
+            mean_preservation_alpha: pres_rep.mean_alpha,
+            vocal_leakage_attenuation_db: pres_rep.vocal_leakage_attenuation_db,
         };
 
-        Ok((cleaned, removed_noise, report))
+        Ok((final_cleaned, removed_noise, report))
     }
 }
 
@@ -168,8 +185,9 @@ impl DenoiserBackend for DpdfnetDenoiser {
     }
 
     fn latency_samples(&self) -> usize {
-        // DPDFNet2 operates on 480-sample hops (10 ms at 48 kHz)
-        480
+        // sherpa-onnx OfflineSpeechDenoiser operates in offline mode, producing output
+        // that is time-aligned with the input at 0 samples delay (lag 0).
+        0
     }
 
     fn reset(&mut self) -> Result<(), DenoiserError> {

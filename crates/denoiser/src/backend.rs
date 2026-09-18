@@ -31,6 +31,10 @@ pub struct DenoiseReport {
     pub removed_noise_rms_dbfs: f32,
     /// Total attenuation achieved in dB.
     pub attenuation_db: f32,
+    /// Mean preservation blending alpha applied across all samples (Phase 7).
+    pub mean_preservation_alpha: f32,
+    /// Vocal leakage attenuation in dB for the removed noise track (Phase 7).
+    pub vocal_leakage_attenuation_db: f32,
 }
 
 /// Generic interface for neural speech and singing enhancement backends.

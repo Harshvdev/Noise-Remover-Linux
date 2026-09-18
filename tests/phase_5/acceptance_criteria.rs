@@ -110,7 +110,10 @@ fn test_diagnose_user_recording_if_present() {
     println!("Input RMS: {:.1} dBFS -> Cleaned RMS: {:.1} dBFS", agg_result.report.input_rms_dbfs, agg_result.report.cleaned_rms_dbfs);
     println!("Attenuation: {:.1} dB", agg_result.report.attenuation_db);
     println!("Residual Noise Floor: {:.1} dBFS", agg_result.residual.residual_noise_dbfs);
-    println!("Post-DSP SNR: {:.1} dB", agg_result.residual.post_dsp_snr_db);
+    let bal_result = proc.process(&orig_samples, &profile, Some(&sig_report.activity), &DspConfig::default()).unwrap();
+    let _ = audio_core::write_wav_f32(cleaned_path, &bal_result.cleaned_samples, 48000, 1);
+    let _ = audio_core::write_wav_f32(std::path::Path::new("../recordings/removed_noise.wav"), &bal_result.removed_noise_samples, 48000, 1);
+
     let expected_decision = match res_report.level {
         ResidualLevel::Low => DenoiseDecision::FinishWithoutAi,
         ResidualLevel::Moderate | ResidualLevel::High => DenoiseDecision::InvokeNeuralBackend,
