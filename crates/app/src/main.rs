@@ -88,6 +88,8 @@ struct NoiseRemoverApp {
     dsp_preservation_report: Option<dsp::PreservationReport>,
     adaptive_preservation: bool,
     manual_preservation_alpha: f32,
+    enable_declicker: bool,
+    enable_plosive_filter: bool,
     devices: Vec<(usize, String)>,
     selected_device_idx: usize,
     active_tab: AudioTab,
@@ -160,6 +162,8 @@ impl NoiseRemoverApp {
             dsp_preservation_report: None,
             adaptive_preservation: true,
             manual_preservation_alpha: 0.85,
+            enable_declicker: true,
+            enable_plosive_filter: true,
             devices,
             selected_device_idx: selected_idx,
             active_tab: AudioTab::Original,
@@ -325,6 +329,8 @@ impl NoiseRemoverApp {
         };
 
         let mut config = self.dsp_intensity.to_config();
+        config.enable_declicker = self.enable_declicker;
+        config.enable_plosive_filter = self.enable_plosive_filter;
         if !self.adaptive_preservation {
             config.preservation = dsp::PreservationMode::Global(self.manual_preservation_alpha);
         }
@@ -425,16 +431,35 @@ impl NoiseRemoverApp {
         let (tx, rx) = channel();
         self.ai_rx = Some(rx);
 
+        let is_preprocessed_by_dsp = input_path == self.dsp_cleaned_path();
+        let apply_declick = self.enable_declicker && !is_preprocessed_by_dsp;
+        let apply_plosive = self.enable_plosive_filter && !is_preprocessed_by_dsp;
+
+        let mut samples_to_process = samples.clone();
+        if apply_declick {
+            let declicker = dsp::Declicker::default_48k();
+            declicker.process_in_place(&mut samples_to_process);
+        }
+        if apply_plosive {
+            let mut plosive = dsp::PlosiveFilter::default_48k();
+            plosive.process_in_place(&mut samples_to_process);
+        }
+
+        let raw_samples = samples.clone();
         let selected_model = self.selected_neural_model;
         let mut dpdf_config = self.denoiser_config.clone();
         if !self.adaptive_preservation {
             dpdf_config.preservation = dsp::PreservationMode::Global(self.manual_preservation_alpha);
+        } else {
+            dpdf_config.preservation = dsp::PreservationMode::Global(1.0);
         }
 
         let mut df_config = self.deepfilter_config.clone();
         df_config.post_filter = self.deepfilter_post_filter;
         if !self.adaptive_preservation {
             df_config.preservation = dsp::PreservationMode::Global(self.manual_preservation_alpha);
+        } else {
+            df_config.preservation = dsp::PreservationMode::Global(1.0);
         }
 
         let activity = self.signal_report.as_ref().map(|r| r.activity.clone());
@@ -442,20 +467,25 @@ impl NoiseRemoverApp {
             let res = match selected_model {
                 NeuralModel::Dpdfnet2_48k => {
                     match DpdfnetDenoiser::new(dpdf_config) {
-                        Ok(mut denoiser) => denoiser.denoise_with_activity(&samples, activity.as_ref()),
+                        Ok(mut denoiser) => denoiser.denoise_with_activity(&samples_to_process, activity.as_ref()),
                         Err(e) => Err(e),
                     }
                 }
                 NeuralModel::DeepFilterNet3 => {
                     match DeepFilterDenoiser::new(df_config) {
-                        Ok(mut denoiser) => denoiser.denoise_with_activity(&samples, activity.as_ref()),
+                        Ok(mut denoiser) => denoiser.denoise_with_activity(&samples_to_process, activity.as_ref()),
                         Err(e) => Err(e),
                     }
                 }
             };
 
             match res {
-                Ok((cleaned, removed, report)) => {
+                Ok((cleaned, _, report)) => {
+                    let removed: Vec<f32> = raw_samples
+                        .iter()
+                        .zip(cleaned.iter())
+                        .map(|(&orig, &c)| orig - c)
+                        .collect();
                     let _ = tx.send(AiWorkerMessage::Success {
                         cleaned,
                         removed,
@@ -1256,7 +1286,11 @@ impl eframe::App for NoiseRemoverApp {
 
                     ui.separator();
 
-                    // Phase 7 Preservation Layer Controls
+                    // Audio Pre-Conditioning & Preservation Layer Controls
+                    ui.checkbox(&mut self.enable_declicker, "🧹 De-Click")
+                        .on_hover_text("Adaptive impulse de-clicker: Eliminates USB packet jitter, electrical clicks, and mic ticks without altering speech timbre.");
+                    ui.checkbox(&mut self.enable_plosive_filter, "💨 Breath Guard")
+                        .on_hover_text("80 Hz 4th-order low-cut & plosive protection: Eliminates breath air blasts, microphone wind turbulence, and mechanical rumble.");
                     ui.checkbox(&mut self.adaptive_preservation, "🛡 Vocal Safe")
                         .on_hover_text("Phase 7 Preservation Layer: Protects vocal harmonics and subtle timbre, preventing comb-filtering and phasing artifacts.");
 

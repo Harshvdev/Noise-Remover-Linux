@@ -90,10 +90,11 @@ impl HarmonicityEstimator {
 
         for candidate_bin in min_bin..=max_bin {
             // A fundamental candidate must be a local spectral peak
-            if candidate_bin > 0 && candidate_bin + 1 < bins {
-                if mag[candidate_bin] <= mag[candidate_bin - 1] || mag[candidate_bin] <= mag[candidate_bin + 1] {
-                    continue;
-                }
+            if candidate_bin > 0
+                && candidate_bin + 1 < bins
+                && (mag[candidate_bin] <= mag[candidate_bin - 1] || mag[candidate_bin] <= mag[candidate_bin + 1])
+            {
+                continue;
             }
 
             let f0_energy = mag[candidate_bin] * mag[candidate_bin];

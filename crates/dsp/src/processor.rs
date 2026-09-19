@@ -15,10 +15,12 @@ use std::time::Instant;
 
 use crate::activity::ActivityReport;
 use crate::dc_blocker::DcBlocker;
+use crate::declicker::Declicker;
 use crate::error::DspError;
 use crate::mask::{MaskSmoother, MaskSmootherConfig};
 use crate::noise_profile::NoiseProfile;
 use crate::notch::TonalNotchFilter;
+use crate::plosive::PlosiveFilter;
 use crate::preservation::{
     AdaptivePreservationConfig, PreservationLayer, PreservationMode, PreservationReport,
 };
@@ -50,6 +52,8 @@ impl DspIntensity {
     pub fn to_config(self) -> DspConfig {
         match self {
             Self::Gentle => DspConfig {
+                enable_declicker: true,
+                enable_plosive_filter: false,
                 enable_dc_blocker: true,
                 enable_tonal_notch: true,
                 min_notch_confidence: 0.60,
@@ -70,6 +74,8 @@ impl DspIntensity {
                 }),
             },
             Self::Balanced => DspConfig {
+                enable_declicker: true,
+                enable_plosive_filter: false,
                 enable_dc_blocker: true,
                 enable_tonal_notch: true,
                 min_notch_confidence: 0.60,
@@ -81,15 +87,11 @@ impl DspIntensity {
                     vocal_protection: true,
                 },
                 mask_smoothing: MaskSmootherConfig::default(),
-                preservation: PreservationMode::Adaptive(AdaptivePreservationConfig {
-                    base_alpha: 1.0,
-                    min_vocal_alpha: 0.75,
-                    vocal_protection_strength: 0.80,
-                    harmonic_protection_strength: 0.85,
-                    ..AdaptivePreservationConfig::default()
-                }),
+                preservation: PreservationMode::Global(1.0),
             },
             Self::Aggressive => DspConfig {
+                enable_declicker: true,
+                enable_plosive_filter: false,
                 enable_dc_blocker: true,
                 enable_tonal_notch: true,
                 min_notch_confidence: 0.50,
@@ -105,13 +107,7 @@ impl DspIntensity {
                     release_factor: 0.35,
                     center_weight: 0.65,
                 },
-                preservation: PreservationMode::Adaptive(AdaptivePreservationConfig {
-                    base_alpha: 1.0,
-                    min_vocal_alpha: 0.88,
-                    vocal_protection_strength: 0.70,
-                    harmonic_protection_strength: 0.75,
-                    ..AdaptivePreservationConfig::default()
-                }),
+                preservation: PreservationMode::Global(1.0),
             },
         }
     }
@@ -120,6 +116,10 @@ impl DspIntensity {
 /// Configuration for the DSP noise removal pass.
 #[derive(Debug, Clone)]
 pub struct DspConfig {
+    /// Enable sample-accurate impulse de-clicker for USB jitter and mic clicks.
+    pub enable_declicker: bool,
+    /// Enable 4th-order 80 Hz acoustic low-cut and breath puff dampener.
+    pub enable_plosive_filter: bool,
     /// Enable 1-pole infrasonic DC blocker (< 38 Hz).
     pub enable_dc_blocker: bool,
     /// Enable biquad notch filtering for confirmed tonal hums.
@@ -232,8 +232,18 @@ impl DspProcessor {
         let input_rms = (input_samples.iter().map(|&s| s * s).sum::<f32>() / input_samples.len() as f32).sqrt();
         let input_rms_dbfs = 20.0 * (input_rms.max(1e-12)).log10();
 
-        // 1. Time-domain pre-filtering: DC Blocker & Tonal Notches
+        // 1. Time-domain pre-filtering: De-Clicker, Plosive/Low-Cut, DC Blocker & Tonal Notches
         let mut preprocessed = input_samples.to_vec();
+
+        if config.enable_declicker {
+            let declicker = Declicker::default_48k();
+            declicker.process_in_place(&mut preprocessed);
+        }
+
+        if config.enable_plosive_filter {
+            let mut plosive = PlosiveFilter::default_48k();
+            plosive.process_in_place(&mut preprocessed);
+        }
 
         if config.enable_dc_blocker {
             let mut dc_blocker = DcBlocker::default_48k();

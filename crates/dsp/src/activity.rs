@@ -76,6 +76,10 @@ pub fn detect_activity(
     let noise_vocal_power: f32 = noise_profile.psd[bin_start..=bin_end].iter().sum();
     let noise_ref = noise_vocal_power.max(1e-12);
 
+    let bin_sub_end = noise_profile.frequency_to_bin(80.0).min(bin_start);
+    let noise_sub_power: f32 = noise_profile.psd[0..=bin_sub_end].iter().sum();
+    let noise_sub_ref = noise_sub_power.max(1e-12);
+
     let mut frame_confidences = Vec::with_capacity(num_frames);
     let mut active_frames_count = 0;
     let mut total_active_snr = 0.0f32;
@@ -91,7 +95,20 @@ pub fn detect_activity(
 
         // Smooth sigmoid confidence: c = 1 / (1 + exp(-0.6 * (snr_db - threshold_db)))
         let x = 0.6 * (snr_db - config.snr_threshold_db);
-        let conf = 1.0 / (1.0 + (-x).exp());
+        let mut conf = 1.0 / (1.0 + (-x).exp());
+
+        // Breath / Wind rejection:
+        // In breath puffs and microphone wind turbulence, infrasonic energy (< 80 Hz)
+        // surges massively above the calibrated noise baseline and exceeds the vocal band.
+        if bin_sub_end > 0 {
+            let sub_power: f32 = frame[0..=bin_sub_end].iter().map(|c| c.norm_sqr()).sum();
+            let is_uncalibrated_surge = sub_power > 4.0 * noise_sub_ref;
+
+            if is_uncalibrated_surge && sub_power > 3.0 * signal_vocal_power.max(1e-12) && sub_power > 1e-4 {
+                let breath_penalty = (signal_vocal_power / (sub_power + 1e-6)).clamp(0.0, 1.0);
+                conf *= breath_penalty;
+            }
+        }
 
         if conf >= 0.5 {
             active_frames_count += 1;

@@ -266,7 +266,7 @@ impl AudioPlayer {
                 let play_arc = is_playing.clone();
 
                 device.build_output_stream(
-                    config.clone(),
+                    config,
                     move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
                         data.fill(0.0);
                         if !play_arc.load(Ordering::Relaxed) {
@@ -341,7 +341,7 @@ impl AudioPlayer {
                 let play_arc = is_playing.clone();
 
                 device.build_output_stream(
-                    config.clone(),
+                    config,
                     move |data: &mut [i16], info: &cpal::OutputCallbackInfo| {
                         data.fill(0);
                         if !play_arc.load(Ordering::Relaxed) {
@@ -415,7 +415,7 @@ impl AudioPlayer {
                 let play_arc = is_playing.clone();
 
                 device.build_output_stream(
-                    config.clone(),
+                    config,
                     move |data: &mut [u16], info: &cpal::OutputCallbackInfo| {
                         data.fill(32768);
                         if !play_arc.load(Ordering::Relaxed) {
@@ -500,7 +500,7 @@ impl AudioPlayer {
                         let play_arc = is_playing.clone();
 
                         device.build_output_stream(
-                            config.clone(),
+                            config,
                             move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
                                 data.fill(0.0);
                                 if !play_arc.load(Ordering::Relaxed) {

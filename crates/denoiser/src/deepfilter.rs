@@ -38,7 +38,7 @@ impl Default for DeepFilterConfig {
             post_filter: false,
             post_filter_beta: 0.02,
             attenuation_limit_db: 100.0,
-            preservation: dsp::PreservationMode::Adaptive(dsp::AdaptivePreservationConfig::default()),
+            preservation: dsp::PreservationMode::Global(1.0),
         }
     }
 }
@@ -115,6 +115,7 @@ impl DeepFilterDenoiser {
         activity: Option<&dsp::ActivityReport>,
     ) -> Result<(Vec<f32>, Vec<f32>, DenoiseReport), DenoiserError> {
         let start_time = Instant::now();
+
         let cleaned = self.process(input)?;
         let elapsed_ms = start_time.elapsed().as_secs_f32() * 1000.0;
 

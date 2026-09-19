@@ -10,12 +10,14 @@
 pub mod activity;
 pub mod analyzer;
 pub mod dc_blocker;
+pub mod declicker;
 pub mod error;
 pub mod harmonicity;
 pub mod latency;
 pub mod mask;
 pub mod noise_profile;
 pub mod notch;
+pub mod plosive;
 pub mod preservation;
 pub mod processor;
 pub mod residual;
@@ -28,12 +30,14 @@ pub mod window;
 pub use activity::{detect_activity, ActivityConfig, ActivityReport};
 pub use analyzer::{NoiseAnalyzer, SignalAnalysisReport};
 pub use dc_blocker::{apply_dc_blocker, DcBlocker};
+pub use declicker::{apply_declicker, DeclickReport, Declicker, DeclickerConfig};
 pub use error::DspError;
 pub use harmonicity::{FrameHarmonicity, HarmonicityConfig, HarmonicityEstimator};
 pub use latency::{CombFilterMetrics, LatencyAligner};
 pub use mask::{MaskSmoother, MaskSmootherConfig};
 pub use noise_profile::NoiseProfile;
 pub use notch::{BiquadNotch, TonalNotchFilter};
+pub use plosive::{apply_plosive_filter, Butterworth4thHighPass, PlosiveConfig, PlosiveFilter};
 pub use preservation::{
     AdaptivePreservationConfig, PreservationLayer, PreservationMode, PreservationReport,
 };

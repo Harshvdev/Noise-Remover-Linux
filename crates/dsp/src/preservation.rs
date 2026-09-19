@@ -35,7 +35,7 @@ impl Default for AdaptivePreservationConfig {
     fn default() -> Self {
         Self {
             base_alpha: 1.0,
-            min_vocal_alpha: 0.45,
+            min_vocal_alpha: 0.85,
             vocal_protection_strength: 0.85,
             harmonic_protection_strength: 0.90,
             harmonicity: HarmonicityConfig::default(),
@@ -184,8 +184,7 @@ impl PreservationLayer {
                                 .max(harm_active * cfg.harmonic_protection_strength)
                                 .clamp(0.0, 1.0);
 
-                            let mut frame_alpha =
-                                cfg.base_alpha - prot_weight * (cfg.base_alpha - cfg.min_vocal_alpha);
+                            let mut frame_alpha = cfg.base_alpha;
 
                             let start_idx = t * hop;
                             let end_idx = (start_idx + hop).min(n);
@@ -193,7 +192,10 @@ impl PreservationLayer {
                             // Over-suppression detector: if active vocal/singing is detected,
                             // but the neural processor attenuated the signal drastically (Y power << X power),
                             // adapt alpha lower to prevent vocal cutout and eliminate residual vocal leakage into the noise track.
-                            if prot_weight >= 0.40 && start_idx < end_idx {
+                            // Ensure genuine voice (harmonic structure or strong vocal confidence) is present
+                            // so unvoiced breath/wind puffs are never mistakenly preserved.
+                            let is_genuine_voice = harm_active >= 0.20 || vocal_active >= 0.50;
+                            if prot_weight >= 0.40 && is_genuine_voice && start_idx < end_idx {
                                 let x_power: f32 = aligned_orig[start_idx..end_idx]
                                     .iter()
                                     .map(|&s| s * s)
@@ -210,11 +212,27 @@ impl PreservationLayer {
                                 if mean_sample_power > 4e-4 && y_power < 0.60 * x_power {
                                     // Neural model dropped the voice: scale alpha down proportionally
                                     let suppression_ratio = (y_power / x_power).clamp(0.0, 1.0);
-                                    frame_alpha = (frame_alpha * suppression_ratio).max(0.08);
+                                    frame_alpha = (frame_alpha * suppression_ratio).max(cfg.min_vocal_alpha);
                                 }
                             }
 
                             alphas[start_idx..end_idx].fill(frame_alpha.clamp(0.0, 1.0));
+                        }
+
+                        // Zero-phase continuous temporal smoothing across frame boundaries
+                        // to completely eliminate hop-boundary gain switching clicks and jitter
+                        if !alphas.is_empty() {
+                            let alpha_smooth_factor = (1.0 / (0.008 * self.sample_rate as f32)).clamp(0.002, 0.05);
+                            let mut smooth_fwd = alphas[0];
+                            for a in alphas.iter_mut() {
+                                smooth_fwd += alpha_smooth_factor * (*a - smooth_fwd);
+                                *a = smooth_fwd;
+                            }
+                            let mut smooth_bwd = *alphas.last().unwrap();
+                            for a in alphas.iter_mut().rev() {
+                                smooth_bwd += alpha_smooth_factor * (*a - smooth_bwd);
+                                *a = smooth_bwd;
+                            }
                         }
                     }
                 }
