@@ -149,12 +149,12 @@ impl HarmonicityEstimator {
             let contrast = harm_energy / valley_energy.max(1e-12);
             let has_contrast = contrast >= 2.5;
 
-            // A genuine vocal harmonic series requires high contrast and at least 2 overtones,
-            // or for high-pitched singing (F0 >= 300 Hz) at least 1 overtone when fundamental is dominant.
-            let is_singing_candidate = has_contrast && (
-                (overtone_count >= 2)
-                || (overtone_count >= 1 && cand_f0_hz >= 300.0 && (f0_energy / total_band_energy) > 0.30)
-            );
+            // A genuine vocal harmonic series requires high contrast and at least 1 overtone,
+            // or for sustained vowels ('aaaa', 'oooooo', head voice, pitch glides) a dominant fundamental in the vocal band.
+            let peak_ratio = f0_energy / total_band_energy.max(1e-12);
+            let is_singing_candidate = (has_contrast
+                && (overtone_count >= 1 || (cand_f0_hz >= 120.0 && peak_ratio > 0.25)))
+                || (peak_ratio > 0.40 && cand_f0_hz >= 100.0);
 
             if is_singing_candidate && harm_energy > best_harmonic_energy {
                 best_harmonic_energy = harm_energy;
@@ -163,14 +163,14 @@ impl HarmonicityEstimator {
             }
         }
 
-        let harmonicity = if best_overtone_count >= 2
-            || (best_overtone_count >= 1 && (best_bin as f32 * bin_hz) >= 300.0)
-        {
-            (best_harmonic_energy / total_band_energy).clamp(0.0, 1.0)
+        let peak_energy = if best_bin > 0 { mag[best_bin] * mag[best_bin] } else { 0.0 };
+        let is_dominant_tone = best_bin > 0 && (peak_energy / total_band_energy.max(1e-12)) > 0.35;
+        let harmonicity = if best_overtone_count >= 1 || is_dominant_tone {
+            (best_harmonic_energy / total_band_energy.max(1e-12)).clamp(0.0, 1.0)
         } else {
             0.0
         };
-        let is_voiced = harmonicity >= self.config.min_voiced_harmonicity;
+        let is_voiced = harmonicity >= self.config.min_voiced_harmonicity || is_dominant_tone;
 
         let f0_hz = if is_voiced && best_bin > 0 {
             let delta = if best_bin > 0 && best_bin + 1 < bins {

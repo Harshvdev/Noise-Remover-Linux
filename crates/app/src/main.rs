@@ -451,7 +451,7 @@ impl NoiseRemoverApp {
         if !self.adaptive_preservation {
             dpdf_config.preservation = dsp::PreservationMode::Global(self.manual_preservation_alpha);
         } else {
-            dpdf_config.preservation = dsp::PreservationMode::Global(1.0);
+            dpdf_config.preservation = dsp::PreservationMode::Adaptive(dsp::AdaptivePreservationConfig::default());
         }
 
         let mut df_config = self.deepfilter_config.clone();
@@ -459,7 +459,7 @@ impl NoiseRemoverApp {
         if !self.adaptive_preservation {
             df_config.preservation = dsp::PreservationMode::Global(self.manual_preservation_alpha);
         } else {
-            df_config.preservation = dsp::PreservationMode::Global(1.0);
+            df_config.preservation = dsp::PreservationMode::Adaptive(dsp::AdaptivePreservationConfig::default());
         }
 
         let activity = self.signal_report.as_ref().map(|r| r.activity.clone());

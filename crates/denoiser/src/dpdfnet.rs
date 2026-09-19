@@ -34,7 +34,7 @@ impl Default for DpdfnetConfig {
             model_path,
             num_threads: 2,
             attenuation_limit_db: 0.0,
-            preservation: dsp::PreservationMode::Global(1.0),
+            preservation: dsp::PreservationMode::Adaptive(dsp::AdaptivePreservationConfig::default()),
         }
     }
 }

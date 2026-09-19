@@ -38,7 +38,7 @@ impl Default for DeepFilterConfig {
             post_filter: false,
             post_filter_beta: 0.02,
             attenuation_limit_db: 100.0,
-            preservation: dsp::PreservationMode::Global(1.0),
+            preservation: dsp::PreservationMode::Adaptive(dsp::AdaptivePreservationConfig::default()),
         }
     }
 }
