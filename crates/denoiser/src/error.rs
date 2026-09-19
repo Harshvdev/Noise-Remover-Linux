@@ -20,4 +20,10 @@ pub enum DenoiserError {
 
     #[error("Audio I/O error: {0}")]
     IoError(#[from] std::io::Error),
+
+    #[error("DSP processing error: {0}")]
+    Dsp(#[from] dsp::DspError),
+
+    #[error("Processing was cancelled by user")]
+    Cancelled,
 }

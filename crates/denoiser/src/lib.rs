@@ -10,6 +10,7 @@ pub mod deepfilter;
 pub mod dpdfnet;
 pub mod error;
 pub mod model;
+pub mod pipeline;
 
 pub use backend::{DenoiseReport, DenoiserBackend};
 pub use deepfilter::{DeepFilterConfig, DeepFilterDenoiser};
@@ -18,6 +19,10 @@ pub use error::DenoiserError;
 pub use model::{
     ensure_deepfilter_binary, ensure_dpdfnet2_model, find_deepfilter_binary, find_dpdfnet2_model,
     DEEPFILTER_BINARY_FILENAME, DPDFNET2_48K_FILENAME,
+};
+pub use pipeline::{
+    AutoPipeline, AutoPipelineConfig, AutoPipelineResult, AutoRoute, CancellationToken,
+    PipelineProgress, PipelineStage,
 };
 
 /// Available neural enhancement models for voice and singing.

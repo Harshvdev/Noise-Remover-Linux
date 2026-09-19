@@ -3,8 +3,9 @@
 mod waveform;
 
 use denoiser::{
-    DeepFilterConfig, DeepFilterDenoiser, DenoiseReport, DpdfnetConfig, DpdfnetDenoiser,
-    NeuralModel,
+    AutoPipeline, AutoPipelineConfig, AutoPipelineResult, AutoRoute, CancellationToken,
+    DeepFilterConfig, DeepFilterDenoiser, DenoiseReport, DenoiserError, DpdfnetConfig,
+    DpdfnetDenoiser, NeuralModel, PipelineProgress, PipelineStage,
 };
 use dsp::{
     DenoiseDecision, DspIntensity, DspProcessingReport, DspProcessor, NoiseAnalyzer, NoiseProfile,
@@ -61,6 +62,13 @@ enum AiWorkerMessage {
     Error(String),
 }
 
+enum AutoWorkerMessage {
+    Progress(PipelineProgress),
+    Success(Box<AutoPipelineResult>),
+    Cancelled,
+    Error(String),
+}
+
 struct NoiseRemoverApp {
     recorder: AudioRecorder,
     player: AudioPlayer,
@@ -78,6 +86,12 @@ struct NoiseRemoverApp {
     deepfilter_config: DeepFilterConfig,
     deepfilter_post_filter: bool,
     denoise_report: Option<DenoiseReport>,
+    is_auto_processing: bool,
+    auto_rx: Option<Receiver<AutoWorkerMessage>>,
+    auto_cancel_token: Option<CancellationToken>,
+    auto_current_progress: Option<PipelineProgress>,
+    auto_report: Option<Box<AutoPipelineResult>>,
+    conservative_bias: bool,
     is_ai_processing: bool,
     ai_rx: Option<Receiver<AiWorkerMessage>>,
     is_uploading: bool,
@@ -152,6 +166,12 @@ impl NoiseRemoverApp {
             deepfilter_config: DeepFilterConfig::default(),
             deepfilter_post_filter: false,
             denoise_report: None,
+            is_auto_processing: false,
+            auto_rx: None,
+            auto_cancel_token: None,
+            auto_current_progress: None,
+            auto_report: None,
+            conservative_bias: true,
             is_ai_processing: false,
             ai_rx: None,
             is_uploading: false,
@@ -499,6 +519,135 @@ impl NoiseRemoverApp {
         });
     }
 
+    fn cancel_auto_pipeline(&mut self) {
+        if let Some(ref token) = self.auto_cancel_token {
+            token.cancel();
+            self.status_message = "Cancelling automatic processing...".into();
+        }
+    }
+
+    fn run_auto_pipeline(&mut self, ctx: &egui::Context) {
+        if self.is_auto_processing
+            || self.is_dsp_processing
+            || self.is_ai_processing
+            || self.is_uploading
+        {
+            return;
+        }
+
+        let rec_path = match self.recorder.last_recording_path() {
+            Some(p) if p.exists() => p.clone(),
+            _ => {
+                self.status_message =
+                    "No audio recording found. Record or upload audio first!".into();
+                return;
+            }
+        };
+
+        let (samples, spec) = match audio_core::read_wav_canonical_f32(&rec_path) {
+            Ok(s) => s,
+            Err(e) => {
+                self.status_message = format!("Failed to read recording: {}", e);
+                return;
+            }
+        };
+
+        let calib_samples = self.recorder.last_calibration_path().and_then(|p| {
+            if p.exists() {
+                audio_core::read_wav_canonical_f32(&p).ok().map(|(s, _)| s)
+            } else {
+                None
+            }
+        });
+
+        self.is_auto_processing = true;
+        let cancel_token = CancellationToken::new();
+        self.auto_cancel_token = Some(cancel_token.clone());
+        self.auto_current_progress = Some(PipelineProgress {
+            stage: PipelineStage::Analyzing,
+            progress: 0.05,
+            message: "Starting 1-Click Auto Clean...".into(),
+        });
+        self.status_message = "⚡ 1-Click Auto Pipeline running in background...".into();
+
+        let (tx, rx) = channel();
+        self.auto_rx = Some(rx);
+
+        let config = AutoPipelineConfig {
+            preferred_neural_backend: self.selected_neural_model,
+            force_neural: false,
+            force_dsp_only: false,
+            conservative_bias: self.conservative_bias,
+            dsp_intensity: self.dsp_intensity,
+            adaptive_preservation: self.adaptive_preservation,
+            enable_declicker: self.enable_declicker,
+            enable_plosive_filter: self.enable_plosive_filter,
+            sample_rate: spec.sample_rate,
+        };
+
+        let dsp_clean_path = self.dsp_cleaned_path();
+        let dsp_noise_path = self.removed_noise_path();
+        let deep_clean_path = self.deep_cleaned_path();
+        let deep_noise_path = self.removed_deep_noise_path();
+        let ctx_clone = ctx.clone();
+
+        std::thread::spawn(move || {
+            let tx_progress = tx.clone();
+            let ctx_prog = ctx_clone.clone();
+            let result = AutoPipeline::run(
+                &samples,
+                calib_samples.as_deref(),
+                &config,
+                Some(&cancel_token),
+                move |progress| {
+                    let _ = tx_progress.send(AutoWorkerMessage::Progress(progress));
+                    ctx_prog.request_repaint();
+                },
+            );
+
+            match result {
+                Ok(res) => {
+                    // Write appropriate output files
+                    let _ = audio_core::write_wav_f32(
+                        &dsp_clean_path,
+                        &res.cleaned_samples,
+                        48000,
+                        1,
+                    );
+                    let _ = audio_core::write_wav_f32(
+                        &dsp_noise_path,
+                        &res.removed_noise_samples,
+                        48000,
+                        1,
+                    );
+
+                    if let AutoRoute::Neural { .. } = &res.route {
+                        let _ = audio_core::write_wav_f32(
+                            &deep_clean_path,
+                            &res.cleaned_samples,
+                            48000,
+                            1,
+                        );
+                        let _ = audio_core::write_wav_f32(
+                            &deep_noise_path,
+                            &res.removed_noise_samples,
+                            48000,
+                            1,
+                        );
+                    }
+                    let _ = tx.send(AutoWorkerMessage::Success(Box::new(res)));
+                }
+                Err(DenoiserError::Cancelled) => {
+                    let _ = tx.send(AutoWorkerMessage::Cancelled);
+                }
+                Err(e) => {
+                    let _ = tx.send(AutoWorkerMessage::Error(e.to_string()));
+                }
+            }
+            ctx_clone.request_repaint();
+        });
+    }
+
     fn reload_active_audio(&mut self) {
         self.reload_active_audio_seamless(false);
     }
@@ -819,6 +968,68 @@ impl eframe::App for NoiseRemoverApp {
                         "Neural denoiser worker disconnected unexpectedly.".into();
                     self.is_ai_processing = false;
                     self.ai_rx = None;
+                }
+            }
+        }
+
+        // Poll for asynchronous Phase 9 Auto Pipeline completion
+        if let Some(ref rx) = self.auto_rx {
+            match rx.try_recv() {
+                Ok(AutoWorkerMessage::Progress(p)) => {
+                    self.status_message = format!("⚡ Auto Pipeline: {} ({:.0}%)", p.stage.as_str(), p.progress * 100.0);
+                    self.auto_current_progress = Some(p);
+                }
+                Ok(AutoWorkerMessage::Cancelled) => {
+                    self.status_message = "Auto Pipeline cancelled by user.".into();
+                    self.is_auto_processing = false;
+                    self.auto_rx = None;
+                    self.auto_cancel_token = None;
+                    self.auto_current_progress = None;
+                }
+                Ok(AutoWorkerMessage::Error(e)) => {
+                    self.status_message = format!("Auto Pipeline failed: {}", e);
+                    self.is_auto_processing = false;
+                    self.auto_rx = None;
+                    self.auto_cancel_token = None;
+                    self.auto_current_progress = None;
+                }
+                Ok(AutoWorkerMessage::Success(res)) => {
+                    let route_desc = match &res.route {
+                        AutoRoute::DspOnly { residual_level, attenuation_db, .. } => {
+                            self.active_tab = AudioTab::DspCleaned;
+                            format!("DSP-Only ({:.1} dB attenuation, {:?} residual)", attenuation_db, residual_level)
+                        }
+                        AutoRoute::Neural { backend, dsp_attenuation_db, .. } => {
+                            self.active_tab = AudioTab::DeepCleaned;
+                            format!("DSP + {} ({:.1} dB DSP atten)", backend.display_name(), dsp_attenuation_db)
+                        }
+                    };
+
+                    self.status_message = format!(
+                        "⚡ 1-Click Auto Clean complete in {:.0} ms (RTF: {:.3})! Route: {}",
+                        res.total_duration_ms, res.rtf, route_desc
+                    );
+
+                    self.noise_profile = Some(res.noise_profile.clone());
+                    self.signal_report = res.signal_report.clone();
+                    self.dsp_report = Some(res.dsp_report.clone());
+                    self.residual_report = Some(res.residual_report.clone());
+                    self.denoise_report = res.denoise_report.clone();
+                    self.auto_report = Some(res);
+
+                    self.reload_active_audio_seamless(true);
+                    self.is_auto_processing = false;
+                    self.auto_rx = None;
+                    self.auto_cancel_token = None;
+                    self.auto_current_progress = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.status_message = "Auto Pipeline worker disconnected unexpectedly.".into();
+                    self.is_auto_processing = false;
+                    self.auto_rx = None;
+                    self.auto_cancel_token = None;
+                    self.auto_current_progress = None;
                 }
             }
         }
@@ -1202,6 +1413,7 @@ impl eframe::App for NoiseRemoverApp {
                         && !status.is_saving
                         && !self.is_ai_processing
                         && !self.is_dsp_processing
+                        && !self.is_auto_processing
                         && !self.is_uploading;
 
                     let upload_btn = ui.add_enabled(
@@ -1232,6 +1444,55 @@ impl eframe::App for NoiseRemoverApp {
 
                     ui.separator();
 
+                    // Phase 9: 1-Click Auto Clean Pipeline
+                    let can_auto = !is_recording
+                        && !is_calibrating
+                        && !status.is_saving
+                        && !self.is_uploading
+                        && !self.is_dsp_processing
+                        && !self.is_ai_processing
+                        && !self.is_auto_processing
+                        && self.recorder.last_recording_path().map(|p| p.exists()).unwrap_or(false);
+
+                    let auto_btn = ui.add_enabled(
+                        can_auto,
+                        egui::Button::new(
+                            RichText::new(if self.is_auto_processing {
+                                "⚡ Auto Cleaning..."
+                            } else {
+                                "⚡ 1-Click Auto Clean"
+                            })
+                            .size(15.0)
+                            .color(if can_auto {
+                                Color32::from_rgb(250, 204, 21)
+                            } else {
+                                Color32::from_rgb(100, 116, 139)
+                            }),
+                        ),
+                    ).on_hover_text("Phase 9 Auto Pipeline: Analyzes noise, applies classical DSP, evaluates residual SNR, and automatically engages Neural AI if needed.");
+
+                    if auto_btn.clicked() {
+                        self.run_auto_pipeline(ctx);
+                    }
+
+                    if self.is_auto_processing {
+                        ui.spinner();
+                        let p_opt = self.auto_current_progress.as_ref();
+                        let p_val = p_opt.map(|p| p.progress).unwrap_or(0.0);
+                        let p_msg = p_opt.map(|p| format!("{}: {:.0}%", p.stage.as_str(), p.progress * 100.0))
+                            .unwrap_or_else(|| "Auto Pipeline Running...".into());
+                        ui.add(ProgressBar::new(p_val).text(p_msg).desired_width(180.0));
+
+                        if ui.button(RichText::new("❌ Cancel").color(Color32::from_rgb(239, 68, 68))).clicked() {
+                            self.cancel_auto_pipeline();
+                        }
+                    }
+
+                    ui.checkbox(&mut self.conservative_bias, "🛡 Conservative Bias")
+                        .on_hover_text("Phase 9 Conservative Bias: Biases toward vocal preservation whenever speech/noise classification is ambiguous (§74).");
+
+                    ui.separator();
+
                     // 3. DSP Noise Removal Button
                     let can_clean = !is_recording
                         && !is_calibrating
@@ -1239,6 +1500,7 @@ impl eframe::App for NoiseRemoverApp {
                         && !self.is_uploading
                         && !self.is_dsp_processing
                         && !self.is_ai_processing
+                        && !self.is_auto_processing
                         && self.noise_profile.is_some()
                         && self
                             .recorder
@@ -1352,6 +1614,7 @@ impl eframe::App for NoiseRemoverApp {
                         && !status.is_saving
                         && !self.is_ai_processing
                         && !self.is_dsp_processing
+                        && !self.is_auto_processing
                         && !self.is_uploading
                         && self.denoiser_available
                         && (self.dsp_cleaned_path().exists()
@@ -1667,6 +1930,28 @@ impl eframe::App for NoiseRemoverApp {
                     };
                     ui.label(format!("• Phasing & Comb Filtering: {}", comb_text));
                     ui.label(format!("• Delay Compensation: {} samples ({:.1} ms)", pres.latency_samples, pres.latency_ms));
+                }
+
+                if let Some(ref auto) = self.auto_report {
+                    ui.add_space(4.0);
+                    ui.separator();
+                    ui.label(RichText::new("Automatic Processing Pipeline (Phase 9):").strong().color(Color32::from_rgb(250, 204, 21)));
+                    match &auto.route {
+                        AutoRoute::DspOnly { residual_level, attenuation_db, reason, .. } => {
+                            ui.label(format!("• Route Selected: Classical DSP-Only ({:.1} dB attenuation)", attenuation_db));
+                            ui.label(format!("• Post-DSP Residual: {:?}", residual_level));
+                            ui.label(format!("• Decision Rationale: {}", reason));
+                        }
+                        AutoRoute::Neural { backend, residual_level, dsp_attenuation_db, reason, .. } => {
+                            ui.label(format!("• Route Selected: Neural Enhancement with {}", backend.display_name()));
+                            ui.label(format!("• Post-DSP Residual: {:?}", residual_level));
+                            ui.label(format!("• Initial DSP Attenuation: {:.1} dB", dsp_attenuation_db));
+                            ui.label(format!("• Decision Rationale: {}", reason));
+                        }
+                    }
+                    ui.label(format!("• Total Processing Time: {:.1} ms (RTF: {:.3})", auto.total_duration_ms, auto.rtf));
+                    let stage_names: Vec<&str> = auto.stages_executed.iter().map(|s| s.as_str()).collect();
+                    ui.label(format!("• Lifecycle Stages: {}", stage_names.join(" ➔ ")));
                 }
             });
             ui.add_space(8.0);
