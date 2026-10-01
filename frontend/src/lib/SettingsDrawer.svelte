@@ -7,17 +7,22 @@
   export let onClose: () => void;
   export let onTrackImported: (() => void) | undefined = undefined;
 
-  let devices: DeviceDto[] = [];
+  let devices: DeviceDto[] = [
+    { index: 0, name: 'Default Audio Input', is_default: true }
+  ];
   let selectedIdx = 0;
   let isImporting = false;
 
   onMount(async () => {
     try {
-      devices = await api.getDevices();
-      const def = devices.find((d) => d.is_default);
-      if (def) selectedIdx = def.index;
+      const list = await api.getDevices();
+      if (list && list.length > 0) {
+        devices = list;
+        const def = devices.find((d) => d.is_default);
+        if (def) selectedIdx = def.index;
+      }
     } catch (e) {
-      console.error(e);
+      console.error('Failed to load audio devices:', e);
     }
   });
 
@@ -148,14 +153,15 @@
   }
 
   .drawer-content {
-    width: 440px;
+    width: min(440px, 100vw);
     height: 100%;
     background: #16161A;
     border-left: 1px solid rgba(255, 255, 255, 0.08);
     box-shadow: -10px 0 40px rgba(0, 0, 0, 0.6);
     display: flex;
     flex-direction: column;
-    padding: 28px 24px;
+    padding: clamp(16px, 3vh, 28px) clamp(16px, 3vw, 24px);
+    box-sizing: border-box;
     animation: slideIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
   }
 

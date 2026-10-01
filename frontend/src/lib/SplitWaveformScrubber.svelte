@@ -14,12 +14,15 @@
   let canvas: HTMLCanvasElement;
   let animId: number;
   let container: HTMLDivElement;
+  let scrubberTrackEl: HTMLDivElement;
 
-  // Split reveal divider position (0.0 to 1.0)
-  let wipeRatio = 0.48;
-  let isDraggingWipe = false;
+  // Floating play/pause button auto-hide state
+  let showControls = true;
+  let hideTimeout: ReturnType<typeof setTimeout> | null = null;
+  let isDraggingScrubber = false;
+  let isDraggingWaveform = false;
 
-  // Static grain particles for Raw side
+  // Static grain particles for Raw mode
   interface RawGrain {
     x: number;
     y: number;
@@ -30,21 +33,57 @@
 
   function initRawGrains(width: number, height: number) {
     rawGrains = [];
-    const count = 400;
+    const count = 1200;
     for (let i = 0; i < count; i++) {
+      // Gaussian-clustered y offset around center with organic spread
+      const u1 = Math.max(1e-4, Math.random());
+      const u2 = Math.random();
+      const randNorm = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+      const ySpread = randNorm * (height * 0.28);
+
       rawGrains.push({
         x: Math.random() * width,
-        y: (Math.random() - 0.5) * height * 0.75,
-        size: Math.random() * 1.6 + 0.6,
-        alpha: Math.random() * 0.45 + 0.15,
+        y: ySpread,
+        size: Math.random() * 1.5 + 0.5,
+        alpha: Math.random() * 0.45 + 0.12,
       });
     }
   }
 
   function formatTime(s: number): string {
-    const mins = Math.floor(s / 60);
-    const secs = Math.floor(s % 60);
+    const safe = Math.max(0, s);
+    const mins = Math.floor(safe / 60);
+    const secs = Math.floor(safe % 60);
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  }
+
+  $: playheadRatio = durationSecs > 0 ? Math.min(1, Math.max(0, currentPosSecs / durationSecs)) : 0;
+
+  function scheduleHideControls() {
+    if (hideTimeout) clearTimeout(hideTimeout);
+    showControls = true;
+    if (isPlaying) {
+      hideTimeout = setTimeout(() => {
+        showControls = false;
+      }, 2000);
+    }
+  }
+
+  function handleStageMouseMove() {
+    scheduleHideControls();
+  }
+
+  function handleStageMouseLeave() {
+    if (isPlaying && !isDraggingWaveform) {
+      showControls = false;
+    }
+  }
+
+  $: if (!isPlaying) {
+    showControls = true;
+    if (hideTimeout) clearTimeout(hideTimeout);
+  } else {
+    scheduleHideControls();
   }
 
   onMount(() => {
@@ -68,71 +107,57 @@
       const width = rect.width;
       const height = rect.height;
       const centerY = height / 2;
-      const wipeX = width * wipeRatio;
 
       ctx.clearRect(0, 0, width, height);
 
-      const barCount = 100;
+      const barCount = Math.max(60, Math.min(120, Math.round(width / 7.2)));
       const barSpacing = width / barCount;
-      const barWidth = 3.2;
+      const barWidth = Math.max(2.2, barSpacing * 0.56);
 
-      // 1. Draw Clean Side (Left of wipeX)
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(0, 0, wipeX, height);
-      ctx.clip();
-
-      for (let i = 0; i < barCount; i++) {
-        const x = i * barSpacing + barSpacing / 2;
-        if (x > wipeX + 2) break;
-
-        const normIdx = Math.floor((i / barCount) * cleanWaveform.length);
-        const peak = cleanWaveform[normIdx] || 0.3;
-        const h = Math.max(6, peak * (height * 0.76));
-
+      if (isCleanAudio) {
+        // Enhanced Mode: 100% Glowing Neon Lime Bars, No Noise Particles
+        const activeWave = cleanWaveform.length > 0 ? cleanWaveform : rawWaveform;
         ctx.shadowColor = '#C6FF3D';
-        ctx.shadowBlur = 12;
+        ctx.shadowBlur = 10;
         ctx.fillStyle = '#C6FF3D';
 
-        ctx.beginPath();
-        ctx.roundRect(x - barWidth / 2, centerY - h / 2, barWidth, h, 2);
-        ctx.fill();
-      }
-      ctx.restore();
+        for (let i = 0; i < barCount; i++) {
+          const x = i * barSpacing + barSpacing / 2;
+          const normIdx = Math.floor((i / barCount) * activeWave.length);
+          const peak = activeWave[normIdx] || 0.28;
+          const h = Math.max(6, peak * (height * 0.78));
 
-      // 2. Draw Raw Side (Right of wipeX) - stippled grey static grain
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(wipeX, 0, width - wipeX, height);
-      ctx.clip();
+          ctx.beginPath();
+          ctx.roundRect(x - barWidth / 2, centerY - h / 2, barWidth, h, 9999);
+          ctx.fill();
+        }
+      } else {
+        // Disabled Enhancement Mode: Organic Grain Noise Particles & Textured Silver Bars
+        ctx.shadowBlur = 0;
 
-      // Draw grain particles
-      for (const g of rawGrains) {
-        if (g.x >= wipeX) {
-          ctx.fillStyle = `rgba(200, 200, 215, ${g.alpha})`;
+        // Draw particle hiss/noise mist
+        for (const g of rawGrains) {
+          ctx.fillStyle = `rgba(220, 220, 235, ${g.alpha})`;
           ctx.beginPath();
           ctx.arc(g.x, centerY + g.y, g.size, 0, Math.PI * 2);
           ctx.fill();
         }
+
+        // Draw raw waveform bars
+        const activeWave = rawWaveform.length > 0 ? rawWaveform : cleanWaveform;
+        ctx.fillStyle = 'rgba(215, 215, 230, 0.75)';
+
+        for (let i = 0; i < barCount; i++) {
+          const x = i * barSpacing + barSpacing / 2;
+          const normIdx = Math.floor((i / barCount) * activeWave.length);
+          const peak = activeWave[normIdx] || 0.28;
+          const h = Math.max(6, peak * (height * 0.78));
+
+          ctx.beginPath();
+          ctx.roundRect(x - barWidth / 2, centerY - h / 2, barWidth, h, 9999);
+          ctx.fill();
+        }
       }
-
-      // Draw raw waveform bars as stippled/fuzzy grey
-      for (let i = 0; i < barCount; i++) {
-        const x = i * barSpacing + barSpacing / 2;
-        if (x < wipeX - 2) continue;
-
-        const normIdx = Math.floor((i / barCount) * rawWaveform.length);
-        const peak = rawWaveform[normIdx] || 0.3;
-        const h = Math.max(6, peak * (height * 0.76));
-
-        ctx.shadowBlur = 0;
-        ctx.fillStyle = 'rgba(210, 210, 225, 0.75)';
-
-        ctx.beginPath();
-        ctx.roundRect(x - barWidth / 2, centerY - h / 2, barWidth, h, 2);
-        ctx.fill();
-      }
-      ctx.restore();
 
       animId = requestAnimationFrame(render);
     };
@@ -147,97 +172,143 @@
 
   onDestroy(() => {
     if (animId) cancelAnimationFrame(animId);
+    if (hideTimeout) clearTimeout(hideTimeout);
   });
 
-  // Handle dragging the vertical wipe divider
-  function startWipeDrag(e: MouseEvent) {
-    isDraggingWipe = true;
-    handleWipeMove(e);
-    window.addEventListener('mousemove', handleWipeMove);
-    window.addEventListener('mouseup', stopWipeDrag);
-  }
-
-  function handleWipeMove(e: MouseEvent) {
-    if (!container) return;
+  // Direct waveform seek & drag
+  function seekWaveformByClientX(clientX: number) {
+    if (!container || durationSecs <= 0) return;
     const rect = container.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    wipeRatio = Math.max(0.05, Math.min(0.95, x / rect.width));
-  }
-
-  function stopWipeDrag() {
-    isDraggingWipe = false;
-    window.removeEventListener('mousemove', handleWipeMove);
-    window.removeEventListener('mouseup', stopWipeDrag);
-  }
-
-  // Handle timeline scrubber drag
-  function handleTimelineClick(e: MouseEvent) {
-    const target = e.currentTarget as HTMLElement;
-    const rect = target.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
+    const ratio = rect.width > 0 ? x / rect.width : 0;
     onSeek(ratio * durationSecs);
+  }
+
+  function handleWaveformMouseDown(e: MouseEvent) {
+    if (e.button !== 0) return;
+    // If clicked directly on the play button, don't seek
+    if ((e.target as HTMLElement).closest('.center-play-btn')) return;
+
+    isDraggingWaveform = true;
+    scheduleHideControls();
+    seekWaveformByClientX(e.clientX);
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!isDraggingWaveform) return;
+      seekWaveformByClientX(ev.clientX);
+    };
+
+    const onMouseUp = () => {
+      isDraggingWaveform = false;
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  }
+
+  // Handle timeline scrubber bar click & drag
+  function seekTimelineByClientX(clientX: number) {
+    if (!scrubberTrackEl || durationSecs <= 0) return;
+    const rect = scrubberTrackEl.getBoundingClientRect();
+    const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
+    const ratio = rect.width > 0 ? x / rect.width : 0;
+    onSeek(ratio * durationSecs);
+  }
+
+  function handleTimelineMouseDown(e: MouseEvent) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    isDraggingScrubber = true;
+    scheduleHideControls();
+    seekTimelineByClientX(e.clientX);
+
+    const onMouseMove = (moveEv: MouseEvent) => {
+      if (!isDraggingScrubber) return;
+      seekTimelineByClientX(moveEv.clientX);
+    };
+
+    const onMouseUp = () => {
+      isDraggingScrubber = false;
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  }
+
+  function handleKeyDown(e: KeyboardEvent) {
+    if (e.key === ' ' || e.code === 'Space') {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        e.target instanceof HTMLSelectElement
+      ) {
+        return;
+      }
+      e.preventDefault();
+      onPlayToggle();
+      scheduleHideControls();
+    }
   }
 </script>
 
+<svelte:window onkeydown={handleKeyDown} />
+
 <div class="split-scrubber-widget">
-  <!-- Center Comparison Waveform Hero -->
+  <!-- Waveform Stage (Interactive Canvas + Synchronized Pin + Centered Hover Play Button) -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="waveform-stage"
     bind:this={container}
-    onmousedown={startWipeDrag}
+    onmousedown={handleWaveformMouseDown}
+    onmousemove={handleStageMouseMove}
+    onmouseleave={handleStageMouseLeave}
   >
     <canvas bind:this={canvas}></canvas>
 
-    <!-- Clean / Raw Section Labels -->
+    <!-- Synchronized Playhead Pin that moves with playback & bottom audio bar -->
     <div
-      class="label-clean"
-      class:label-active={isCleanAudio}
-      style="left: {Math.max(10, wipeRatio * 100 - 6)}%;"
+      class="playhead-pin"
+      class:clean-pin={isCleanAudio}
+      style="left: {playheadRatio * 100}%;"
     >
-      Clean
-    </div>
-    <div
-      class="label-raw"
-      class:label-active={!isCleanAudio}
-      style="left: {Math.min(94, wipeRatio * 100 + 3)}%;"
-    >
-      Raw
+      <div class="pin-line"></div>
     </div>
 
-    <!-- Draggable Vertical Wipe Divider Line -->
-    <div
-      class="wipe-divider"
-      style="left: {wipeRatio * 100}%;"
+    <!-- Centered Play/Pause Button (auto-fades when playing, reappears on hover) -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <button
+      class="center-play-btn"
+      class:visible={showControls}
+      onclick={(e) => {
+        e.stopPropagation();
+        onPlayToggle();
+        scheduleHideControls();
+      }}
+      title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
+      aria-label={isPlaying ? 'Pause' : 'Play'}
     >
-      <!-- Center Circular Play Button -->
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <button
-        class="center-play-btn"
-        onclick={(e) => {
-          e.stopPropagation();
-          onPlayToggle();
-        }}
-        title={isPlaying ? 'Pause' : 'Play'}
-      >
-        {#if isPlaying}
-          <Pause size={22} fill="#0B0B0D" color="#0B0B0D" />
-        {:else}
-          <Play size={22} fill="#0B0B0D" color="#0B0B0D" style="margin-left: 3px;" />
-        {/if}
-      </button>
-    </div>
+      {#if isPlaying}
+        <Pause size={22} fill="#000000" color="#000000" />
+      {:else}
+        <Play size={22} fill="#000000" color="#000000" style="margin-left: 2px;" />
+      {/if}
+    </button>
   </div>
 
   <!-- Bottom Timeline Scrubber Row -->
   <div class="timeline-row">
-    <span class="time-current tabular-nums">{formatTime(currentPosSecs)}</span>
+    <span class="time-label time-current tabular-nums">{formatTime(currentPosSecs)}</span>
 
-    <!-- Scrubber Bar -->
+    <!-- Interactive Scrubber Bar -->
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
       class="scrubber-track"
-      onclick={handleTimelineClick}
+      bind:this={scrubberTrackEl}
+      onmousedown={handleTimelineMouseDown}
       role="slider"
       aria-valuenow={currentPosSecs}
       aria-valuemin={0}
@@ -246,15 +317,18 @@
     >
       <div
         class="scrubber-fill"
-        style="width: {durationSecs > 0 ? (currentPosSecs / durationSecs) * 100 : 0}%;"
+        class:clean-fill={isCleanAudio}
+        style="width: {playheadRatio * 100}%;"
       ></div>
       <div
         class="scrubber-thumb"
-        style="left: {durationSecs > 0 ? (currentPosSecs / durationSecs) * 100 : 0}%;"
+        class:clean-thumb={isCleanAudio}
+        class:is-active-drag={isDraggingScrubber}
+        style="left: {playheadRatio * 100}%;"
       ></div>
     </div>
 
-    <span class="time-total tabular-nums">{formatTime(durationSecs)}</span>
+    <span class="time-label time-total tabular-nums">{formatTime(durationSecs)}</span>
   </div>
 </div>
 
@@ -263,15 +337,15 @@
     width: 100%;
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 16px;
     align-items: center;
   }
 
   .waveform-stage {
     width: 100%;
-    height: 240px;
+    height: clamp(170px, 28vh, 250px);
     position: relative;
-    cursor: ew-resize;
+    cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -284,82 +358,84 @@
     pointer-events: none;
   }
 
-  .label-clean {
-    position: absolute;
-    top: 14px;
-    transform: translateX(-100%);
-    font-size: 13.5px;
-    font-weight: 600;
-    color: var(--accent-lime);
-    letter-spacing: -0.2px;
-    pointer-events: none;
-    text-shadow: 0 0 10px var(--accent-lime-glow);
-  }
-
-  .label-raw {
-    position: absolute;
-    top: 14px;
-    font-size: 13.5px;
-    font-weight: 500;
-    color: rgba(255, 255, 255, 0.75);
-    letter-spacing: -0.2px;
-    pointer-events: none;
-  }
-
-  .wipe-divider {
+  /* Synchronized vertical needle pin */
+  .playhead-pin {
     position: absolute;
     top: 0;
     bottom: 0;
     width: 2px;
-    background-color: var(--accent-lime);
-    box-shadow: 0 0 10px var(--accent-lime-glow);
-    display: flex;
-    align-items: center;
-    justify-content: center;
     pointer-events: none;
     transform: translateX(-50%);
-    z-index: 10;
+    z-index: 8;
   }
 
+  .playhead-pin .pin-line {
+    width: 100%;
+    height: 100%;
+    background-color: #FFFFFF;
+    box-shadow: 0 0 8px rgba(255, 255, 255, 0.5);
+    border-radius: 9999px;
+  }
+
+  .playhead-pin.clean-pin .pin-line {
+    background-color: var(--accent-lime);
+    box-shadow: 0 0 10px var(--accent-lime-glow);
+  }
+
+  /* Centered floating play/pause button */
   .center-play-btn {
-    pointer-events: auto;
-    width: 58px;
-    height: 58px;
-    min-width: 58px;
-    min-height: 58px;
-    flex-shrink: 0;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.92);
+    width: 54px;
+    height: 54px;
     border-radius: 50%;
     background-color: #FFFFFF;
     border: none;
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.65);
     cursor: pointer;
-    transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.15s ease;
+    z-index: 15;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.24s cubic-bezier(0.16, 1, 0.3, 1),
+      transform 0.24s cubic-bezier(0.16, 1, 0.3, 1),
+      background-color 0.15s ease;
+  }
+
+  .center-play-btn.visible {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translate(-50%, -50%) scale(1);
   }
 
   .center-play-btn:hover {
-    transform: scale(1.1);
-    background-color: #F0F0F0;
+    transform: translate(-50%, -50%) scale(1.08);
+    background-color: #F8F8F8;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.75);
   }
 
   .center-play-btn:active {
-    transform: scale(0.96);
+    transform: translate(-50%, -50%) scale(0.95);
   }
 
+  /* Bottom Timeline Scrubber Row */
   .timeline-row {
     width: 100%;
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: 14px;
   }
 
-  .time-current, .time-total {
+  .time-label {
     font-size: 13.5px;
-    color: var(--text-muted);
-    font-weight: 500;
+    color: #FFFFFF;
+    font-weight: 600;
     width: 48px;
+    flex-shrink: 0;
   }
 
   .time-current {
@@ -372,8 +448,8 @@
 
   .scrubber-track {
     flex: 1;
-    height: 6px;
-    background: #23232A;
+    height: 4px;
+    background: #202026;
     border-radius: 9999px;
     position: relative;
     cursor: pointer;
@@ -383,29 +459,44 @@
 
   .scrubber-fill {
     height: 100%;
-    background-color: var(--accent-lime);
+    background-color: #FFFFFF;
     border-radius: 9999px;
-    box-shadow: 0 0 8px var(--accent-lime-glow);
+    box-shadow: 0 0 6px rgba(255, 255, 255, 0.3);
+  }
+
+  .scrubber-fill.clean-fill {
+    background-color: var(--accent-lime);
+    box-shadow: 0 0 6px var(--accent-lime-glow);
   }
 
   .scrubber-thumb {
     position: absolute;
-    width: 16px;
-    height: 16px;
+    top: 50%;
+    width: 14px;
+    height: 14px;
     border-radius: 50%;
-    background-color: var(--accent-lime);
-    transform: translate(-50%, 0);
-    box-shadow: 0 0 10px var(--accent-lime-glow);
+    background-color: #FFFFFF;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 8px rgba(255, 255, 255, 0.6);
     transition: transform 0.1s ease;
   }
 
-  .scrubber-track:hover .scrubber-thumb {
-    transform: translate(-50%, 0) scale(1.2);
+  .scrubber-thumb.clean-thumb {
+    background-color: var(--accent-lime);
+    box-shadow: 0 0 8px rgba(198, 255, 61, 0.7);
+  }
+
+  .scrubber-track:hover .scrubber-thumb,
+  .scrubber-thumb.is-active-drag {
+    transform: translate(-50%, -50%) scale(1.25);
   }
 
   @media (max-height: 720px) {
+    .split-scrubber-widget {
+      gap: 12px;
+    }
     .waveform-stage {
-      height: 180px;
+      height: clamp(150px, 25vh, 200px);
     }
   }
 </style>

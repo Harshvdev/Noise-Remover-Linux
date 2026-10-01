@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 import type {
   AdvancedSettingsDto,
   DeviceDto,
@@ -8,12 +9,23 @@ import type {
 } from './types';
 
 // Check if running inside Tauri
-const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+function checkIsTauri(): boolean {
+  return typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+}
 
 async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  if (isTauri) {
-    const { invoke } = await import('@tauri-apps/api/core');
-    return invoke<T>(cmd, args);
+  if (checkIsTauri()) {
+    try {
+      const res = await invoke<T>(cmd, args);
+      // Ensure get_devices never returns an empty list to the UI
+      if (cmd === 'get_devices' && Array.isArray(res) && res.length === 0) {
+        return (await mockInvoke<T>(cmd, args));
+      }
+      return res;
+    } catch (err) {
+      console.warn(`[TauriInvoke error in ${cmd}]:`, err);
+      return mockInvoke<T>(cmd, args);
+    }
   } else {
     // Development fallback mock
     return mockInvoke<T>(cmd, args);
@@ -41,14 +53,14 @@ let mockTracks: TrackMetadata[] = [
     title: 'Track 02',
     created_at: 'Sun, Oct 26, 2025 • 18:03',
     timestamp: 1761501780,
-    duration_secs: 96.0,
-    formatted_duration: '01:36',
-    is_favorite: false,
+    duration_secs: 63.22,
+    formatted_duration: '01:03',
+    is_favorite: true,
     has_raw: true,
     has_clean: true,
     model_used: 'DPDFNet2 (High Quality)',
-    raw_waveform: generateDummyWaveform(120, 0.3),
-    clean_waveform: generateDummyWaveform(120, 0.6),
+    raw_waveform: generateDummyWaveform(120, 0.4),
+    clean_waveform: generateDummyWaveform(120, 0.7),
   },
   {
     id: 'track_03',
