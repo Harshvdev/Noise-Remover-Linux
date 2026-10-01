@@ -6,6 +6,7 @@ members = [
     "crates/app",
     "crates/dsp",
     "crates/denoiser",
+    "src-tauri",
 ]
 resolver = "2"
 

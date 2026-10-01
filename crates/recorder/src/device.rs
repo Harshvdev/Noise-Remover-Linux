@@ -25,6 +25,58 @@ pub struct PipeWireSourceInfo {
     pub bluetooth_card: Option<String>,
 }
 
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub enum DeviceTier {
+    WiredExternal = 0, // Highest priority: USB mic, external 3.5mm mic, external card
+    Bluetooth = 1,     // Middle priority: Bluetooth headset/earbuds/mic
+    Internal = 2,      // Lowest priority: Built-in laptop mic
+}
+
+/// Classify input device into priority tiers: Wired External > Bluetooth > Internal
+pub fn get_device_tier(name: &str, port: Option<&str>, desc: &str) -> DeviceTier {
+    let name_low = name.to_lowercase();
+    let desc_low = desc.to_lowercase();
+    let port_low = port.map(|p| p.to_lowercase()).unwrap_or_default();
+
+    // 1. Bluetooth devices
+    if name_low.contains("bluez")
+        || desc_low.contains("bluetooth")
+        || port_low.contains("headset-hf")
+        || name_low.contains("rfcomm")
+    {
+        return DeviceTier::Bluetooth;
+    }
+
+    // 2. Wired External devices (USB microphones, 3.5mm line/headset jacks)
+    if name_low.contains("usb")
+        || desc_low.contains("usb")
+        || port_low == "analog-input-mic"
+        || port_low == "analog-input-headset-mic"
+        || port_low == "analog-input-linein"
+        || desc_low.contains("wired")
+        || desc_low.contains("3.5mm")
+        || desc_low.contains("external")
+    {
+        return DeviceTier::WiredExternal;
+    }
+
+    // 3. Internal devices (laptop built-in mics, dmic, ALC analog internal port)
+    if port_low == "analog-input-internal-mic"
+        || desc_low.contains("internal")
+        || desc_low.contains("built-in")
+        || desc_low.contains("dmic")
+        || desc_low.contains("laptop")
+    {
+        return DeviceTier::Internal;
+    }
+
+    if name_low.contains("pci") && name_low.contains("analog") {
+        return DeviceTier::Internal;
+    }
+
+    DeviceTier::WiredExternal
+}
+
 pub struct DeviceManager {
     host: Host,
 }
@@ -179,7 +231,7 @@ impl DeviceManager {
         }
     }
 
-    /// Forcibly move any active app capture streams to the specified target source.
+    /// Forcibly move any active app capture streams to the specified target source if needed.
     pub fn move_app_stream_to_source(target_source: &str) {
         #[cfg(target_os = "linux")]
         {
@@ -370,8 +422,14 @@ impl DeviceManager {
                         }
                     }
 
-                    // If default source was a monitor or not in list, make the first physical mic default
-                    if !list.is_empty() && !list.iter().any(|s| s.is_default) {
+                    // Sort input devices by priority: Wired External > Bluetooth > Internal
+                    list.sort_by_key(|s| get_device_tier(&s.name, s.port.as_deref(), &s.description));
+
+                    // Default to external microphone if available (Wired > Bluetooth > Internal)
+                    if !list.is_empty() {
+                        for s in list.iter_mut() {
+                            s.is_default = false;
+                        }
                         list[0].is_default = true;
                     }
 
@@ -385,6 +443,7 @@ impl DeviceManager {
     }
 
     /// Select an active PipeWire source by index, switching hardware port, unmuting, and ensuring adequate volume.
+    /// Optimized for high responsiveness with minimal latency and no unnecessary thread sleeps.
     pub fn select_pipewire_source(&self, index: usize) -> Result<(), RecorderError> {
         let sources = Self::get_pipewire_sources();
         if let Some(src) = sources.get(index) {
@@ -392,33 +451,40 @@ impl DeviceManager {
             {
                 use std::process::Command;
 
+                let is_bluetooth = src.name.contains("bluez")
+                    || src.bluetooth_card.is_some()
+                    || src.description.to_lowercase().contains("bluetooth");
+
                 let mut active_source_name = src.name.clone();
 
-                if let Some(ref card_name) = src.bluetooth_card {
-                    // Switch Bluetooth card to headset profile (mSBC wideband speech if supported, else HSP/HFP)
-                    let _ = Command::new("pactl")
-                        .args(["set-card-profile", card_name, "headset-head-unit-msbc"])
-                        .output();
-                    let _ = Command::new("pactl")
-                        .args(["set-card-profile", card_name, "headset-head-unit"])
-                        .output();
+                if is_bluetooth {
+                    // Only renegotiate Bluetooth profile if this card does not already have an active input source
+                    if !active_source_name.starts_with("bluez_input") {
+                        if let Some(ref card_name) = src.bluetooth_card {
+                            let _ = Command::new("pactl")
+                                .args(["set-card-profile", card_name, "headset-head-unit-msbc"])
+                                .output();
+                            let _ = Command::new("pactl")
+                                .args(["set-card-profile", card_name, "headset-head-unit"])
+                                .output();
 
-                    // Wait for bluez_input source to appear
-                    for _ in 0..10 {
-                        std::thread::sleep(std::time::Duration::from_millis(30));
-                        if let Some(found_src) = Self::find_active_bluez_source() {
-                            active_source_name = found_src;
-                            break;
+                            for _ in 0..5 {
+                                if let Some(found_src) = Self::find_active_bluez_source() {
+                                    active_source_name = found_src;
+                                    break;
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(20));
+                            }
                         }
                     }
                 } else {
-                    // Switching to internal/hardware mic
+                    // Switching to internal or wired hardware mic
                     if let Some(ref port) = src.port {
                         let _ = Command::new("pactl")
                             .args(["set-source-port", &src.name, port])
                             .output();
                     }
-                    // Restore Bluetooth headphones to high-fidelity stereo A2DP playback
+                    // Restore Bluetooth headphones to high-fidelity stereo A2DP playback when switching away
                     Self::restore_bluetooth_cards_to_a2dp();
                 }
 
@@ -427,53 +493,35 @@ impl DeviceManager {
                     .args(["set-default-source", &active_source_name])
                     .output();
 
-                // 2. Unmute source explicitly (WirePlumber / ALSA often default ports to muted)
+                // 2. Unmute source explicitly in PipeWire
                 let _ = Command::new("pactl")
                     .args(["set-source-mute", &active_source_name, "0"])
                     .output();
 
-                // 3. Ensure adequate capture volume without overdriving ALSA hardware preamps.
-                // Bluetooth digital headsets (mSBC/HFP) operate cleanly with digital volume at ~80%.
-                // ALSA analog internal microphones (e.g. Realtek ALC257) have a 0dB unity gain base at 10%.
-                // In PipeWire, setting volume > 35% triggers 10dB to 20dB of hardware analog boost in ALSA,
-                // which overamplifies ambient room noise and fan hum, causing hard 0dBFS clipping (32767).
-                // Therefore:
-                // - For Bluetooth: ensure volume is at least 80% if uninitialized.
-                // - For ALSA analog mic: if volume is 0% or excessively boosted (> 35%), normalize to clean 25% (0dB boost, ~23dB clean gain).
-                if src.bluetooth_card.is_some() {
+                // 3. Ensure appropriate capture volume without overdriving
+                if is_bluetooth {
                     if src.volume_percent == 0 {
                         let _ = Command::new("pactl")
                             .args(["set-source-volume", &active_source_name, "80%"])
                             .output();
                     }
+                } else if src.name.contains("usb") {
+                    if src.volume_percent == 0 {
+                        let _ = Command::new("pactl")
+                            .args(["set-source-volume", &active_source_name, "75%"])
+                            .output();
+                    }
                 } else {
+                    // For ALSA internal analog mic: normalize volume to 25% if zero or boosted
                     if src.volume_percent == 0 || src.volume_percent > 35 {
                         let _ = Command::new("pactl")
                             .args(["set-source-volume", &active_source_name, "25%"])
                             .output();
                     }
-                    // Reset excessive hardware internal mic boost to 0 dB if card exposes it
                     let _ = Command::new("amixer")
-                        .args(["sset", "Internal Mic Boost", "0"])
-                        .output();
-                    let _ = Command::new("amixer")
-                        .args(["sset", "Mic Boost", "0"])
+                        .args(["sset", "Capture", "cap"])
                         .output();
                 }
-
-                // 4. Unmute hardware ALSA capture switch if present
-                let _ = Command::new("amixer")
-                    .args(["-D", "pulse", "sset", "Capture", "cap"])
-                    .output();
-                let _ = Command::new("amixer")
-                    .args(["sset", "Capture", "cap"])
-                    .output();
-
-                // 5. Move any existing app capture streams to target source
-                Self::move_app_stream_to_source(&active_source_name);
-
-                // Brief settling delay for PipeWire graph routing
-                std::thread::sleep(std::time::Duration::from_millis(60));
             }
             Ok(())
         } else {

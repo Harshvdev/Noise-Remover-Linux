@@ -1,6 +1,11 @@
 /target
 **/*.rs.bk
+recordings/track_*/
+src-tauri/recordings/track_*/
+recordings/**/*.wav
 recordings/*.wav
+src-tauri/recordings/**/*.wav
+src-tauri/recordings/*.wav
 !recordings/.gitkeep
 models/*.onnx
 !models/.gitkeep

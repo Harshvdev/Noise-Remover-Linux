@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>128-Bar MIDI Live Audio Visualizer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    body, html {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #0B0B0D;
+      color: #ffffff;
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    }
+
+    .app-container {
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background-color: #0B0B0D;
+      position: relative;
+    }
+
+    /* Minimal Top Navigation */
+    .top-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 32px;
+      z-index: 10;
+    }
+
+    .title-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-title {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.4px;
+      color: #ffffff;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 10px;
+      border-radius: 9999px;
+      font-size: 11.5px;
+      font-weight: 500;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.7);
+      transition: all 0.2s ease;
+    }
+
+    .status-badge.active {
+      background: rgba(198, 255, 61, 0.14);
+      border-color: rgba(198, 255, 61, 0.45);
+      color: #C6FF3D;
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #888888;
+      transition: background-color 0.2s ease;
+    }
+
+    .status-badge.active .status-dot {
+      background: #C6FF3D;
+      box-shadow: 0 0 8px rgba(198, 255, 61, 0.8);
+    }
+
+    .controls-group {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border-radius: 9999px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: rgba(255, 255, 255, 0.06);
+      color: #ffffff;
+      transition: all 0.15s ease;
+    }
+
+    .btn:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: rgba(255, 255, 255, 0.25);
+    }
+
+    .btn-primary {
+      background: #C6FF3D;
+      color: #0B0B0D;
+      border-color: #C6FF3D;
+      box-shadow: 0 0 14px rgba(198, 255, 61, 0.35);
+    }
+
+    .btn-primary:hover {
+      background: #D4FF5E;
+      border-color: #D4FF5E;
+      box-shadow: 0 0 20px rgba(198, 255, 61, 0.55);
+    }
+
+    /* Main Visualizer Area */
+    .visualizer-viewport {
+      flex: 1;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px 40px;
+    }
+
+    .canvas-container {
+      width: 100%;
+      height: 100%;
+      max-height: 480px;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      mask-image: linear-gradient(
+        to right,
+        transparent 0%,
+        black 48px,
+        black calc(100% - 48px),
+        transparent 100%
+      );
+      -webkit-mask-image: linear-gradient(
+        to right,
+        transparent 0%,
+        black 48px,
+        black calc(100% - 48px),
+        transparent 100%
+      );
+    }
+
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      cursor: crosshair;
+    }
+
+    /* Floating Hover Info */
+    .hover-card {
+      position: absolute;
+      top: 14px;
+      right: 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 5px 12px;
+      background: rgba(14, 16, 20, 0.88);
+      border: 1px solid rgba(198, 255, 61, 0.3);
+      border-radius: 9999px;
+      font-size: 12px;
+      pointer-events: none;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+      opacity: 0;
+      transform: translateY(-4px);
+      transition: opacity 0.15s ease, transform 0.15s ease;
+      z-index: 20;
+    }
+
+    .hover-card.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .hover-note-badge {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 13px;
+      font-weight: 700;
+      color: #C6FF3D;
+    }
+
+    .hover-meta {
+      color: rgba(255, 255, 255, 0.6);
+    }
+
+    .hover-freq {
+      color: #ffffff;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Start Overlay */
+    .start-prompt {
+      position: absolute;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      padding: 16px 28px;
+      background: rgba(14, 16, 20, 0.92);
+      border: 1px solid rgba(198, 255, 61, 0.35);
+      border-radius: 14px;
+      backdrop-filter: blur(12px);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      z-index: 25;
+    }
+
+    .start-prompt:hover {
+      border-color: #C6FF3D;
+      box-shadow: 0 0 24px rgba(198, 255, 61, 0.25);
+    }
+
+    .start-prompt span {
+      font-size: 14px;
+      font-weight: 600;
+      color: #ffffff;
+    }
+
+    .start-prompt small {
+      font-size: 11.5px;
+      color: rgba(255, 255, 255, 0.5);
+    }
+  </style>
+</head>
+<body>
+  <div class="app-container">
+    <header class="top-bar">
+      <div class="title-group">
+        <h1 class="brand-title">Voice Cleaner</h1>
+        <div class="status-badge" id="statusBadge">
+          <span class="status-dot"></span>
+          <span id="statusText">Microphone Idle</span>
+        </div>
+      </div>
+
+      <div class="controls-group">
+        <button class="btn" id="synthBtn" title="Play test tone (fundamental + harmonics) to test visualizer without mic">
+          Test Tone
+        </button>
+
+        <button class="btn btn-primary" id="micBtn">
+          Start Live Mic
+        </button>
+      </div>
+    </header>
+
+    <main class="visualizer-viewport">
+      <div class="canvas-container">
+        <canvas id="visualizerCanvas"></canvas>
+
+        <div class="hover-card" id="hoverCard">
+          <span class="hover-note-badge" id="hoverNote">A4</span>
+          <span class="hover-meta" id="hoverIndex">MIDI Note 69</span>
+          <span class="hover-freq" id="hoverFreq">440.0 Hz</span>
+        </div>
+
+        <div class="start-prompt" id="startPrompt">
+          <span>Click to activate live microphone</span>
+          <small>128 MIDI notes (0–127) • 8.2 Hz to 12.5 kHz</small>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const NUM_BARS = 128;
+    const FFT_SIZE = 2048;
+
+    const currentLevels = new Float32Array(NUM_BARS);
+    const rawTargets = new Float32Array(NUM_BARS);
+    const smoothedTargets = new Float32Array(NUM_BARS);
+
+    const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+    let bands = [];
+    let audioCtx = null;
+    let analyser = null;
+    let mediaStream = null;
+    let freqData = null;
+    let isMicRunning = false;
+    let synthOscs = [];
+    let synthActive = false;
+
+    // Noise cloud particles
+    let noiseCloud = [];
+    for (let i = 0; i < 90; i++) {
+      noiseCloud.push({
+        xNorm: Math.random(),
+        yNorm: (Math.random() - 0.5) * 1.5,
+        size: Math.random() < 0.2 ? 1.8 : 1.2,
+        baseAlpha: 0.04 + Math.random() * 0.12,
+      });
+    }
+
+    const canvas = document.getElementById('visualizerCanvas');
+    const ctx = canvas.getContext('2d');
+    const statusBadge = document.getElementById('statusBadge');
+    const statusText = document.getElementById('statusText');
+    const micBtn = document.getElementById('micBtn');
+    const synthBtn = document.getElementById('synthBtn');
+    const hoverCard = document.getElementById('hoverCard');
+    const hoverNote = document.getElementById('hoverNote');
+    const hoverIndex = document.getElementById('hoverIndex');
+    const hoverFreq = document.getElementById('hoverFreq');
+    const startPrompt = document.getElementById('startPrompt');
+
+    function computeBands(sampleRate) {
+      const binHz = sampleRate / FFT_SIZE;
+      bands = [];
+
+      for (let m = 0; m < NUM_BARS; m++) {
+        const fCenter = 440 * Math.pow(2, (m - 69) / 12);
+        const fLow = 440 * Math.pow(2, (m - 0.5 - 69) / 12);
+        const fHigh = 440 * Math.pow(2, (m + 0.5 - 69) / 12);
+
+        const startBin = Math.max(1, Math.floor(fLow / binHz));
+        const endBin = Math.max(startBin + 1, Math.ceil(fHigh / binHz));
+
+        const normM = m / (NUM_BARS - 1);
+        const weight = 0.88 + Math.pow(normM, 0.72) * 0.54;
+
+        let subFilter = 1.0;
+        if (fCenter < 18) subFilter = 0.0;
+        else if (fCenter < 40) subFilter = Math.pow((fCenter - 18) / 22, 1.6);
+
+        const octave = Math.floor(m / 12) - 1;
+        const noteLetter = NOTE_NAMES[m % 12];
+        const name = `${noteLetter}${octave}`;
+
+        bands.push({ m, name, fCenter, startBin, endBin, weight, subFilter });
+      }
+    }
+
+    async function initAudio() {
+      if (!audioCtx) {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioContextClass({ latencyHint: 'interactive' });
+      }
+      if (audioCtx.state === 'suspended') {
+        await audioCtx.resume();
+      }
+      computeBands(audioCtx.sampleRate || 48000);
+    }
+
+    async function startMicrophone() {
+      try {
+        await initAudio();
+        if (mediaStream) {
+          mediaStream.getTracks().forEach(t => t.stop());
+        }
+
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+          }
+        });
+
+        const source = audioCtx.createMediaStreamSource(mediaStream);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = FFT_SIZE;
+        analyser.minDecibels = -85;
+        analyser.maxDecibels = -25;
+        analyser.smoothingTimeConstant = 0.0;
+        source.connect(analyser);
+
+        freqData = new Uint8Array(analyser.frequencyBinCount);
+
+        isMicRunning = true;
+        statusBadge.classList.add('active');
+        statusText.textContent = 'Live Microphone Active';
+        micBtn.textContent = 'Stop Mic';
+        micBtn.classList.remove('btn-primary');
+        startPrompt.style.display = 'none';
+
+        if (synthActive) stopSynth();
+      } catch (err) {
+        console.error('Error starting microphone:', err);
+        statusText.textContent = 'Mic Error / Denied';
+      }
+    }
+
+    function stopMicrophone() {
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(t => t.stop());
+        mediaStream = null;
+      }
+      isMicRunning = false;
+      statusBadge.classList.remove('active');
+      statusText.textContent = 'Microphone Idle';
+      micBtn.textContent = 'Start Live Mic';
+      micBtn.classList.add('btn-primary');
+    }
+
+    function toggleSynth() {
+      if (synthActive) stopSynth();
+      else startSynth();
+    }
+
+    async function startSynth() {
+      await initAudio();
+      stopSynth();
+
+      if (!analyser) {
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = FFT_SIZE;
+        analyser.minDecibels = -85;
+        analyser.maxDecibels = -25;
+        analyser.smoothingTimeConstant = 0.0;
+        freqData = new Uint8Array(analyser.frequencyBinCount);
+      }
+
+      // Voice-like harmonic spectrum (Fundamental A3 220Hz + harmonics 440, 660, 880, 1100, 1320, 1760Hz)
+      const freqs = [220, 440, 660, 880, 1100, 1320, 1760];
+      const gains = [0.45, 0.35, 0.28, 0.20, 0.15, 0.10, 0.07];
+      const masterGain = audioCtx.createGain();
+      masterGain.gain.setValueAtTime(0.25, audioCtx.currentTime);
+      masterGain.connect(analyser);
+      masterGain.connect(audioCtx.destination);
+
+      synthOscs = freqs.map((f, idx) => {
+        const osc = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        osc.frequency.setValueAtTime(f, audioCtx.currentTime);
+        g.gain.setValueAtTime(gains[idx], audioCtx.currentTime);
+        osc.connect(g);
+        g.connect(masterGain);
+        osc.start();
+        return osc;
+      });
+
+      synthActive = true;
+      synthBtn.textContent = 'Stop Tone';
+      synthBtn.classList.add('btn-primary');
+      startPrompt.style.display = 'none';
+      statusBadge.classList.add('active');
+      statusText.textContent = 'Harmonic Voice Tone Playing';
+    }
+
+    function stopSynth() {
+      synthOscs.forEach(osc => {
+        try { osc.stop(); osc.disconnect(); } catch (e) {}
+      });
+      synthOscs = [];
+      synthActive = false;
+      synthBtn.textContent = 'Test Tone';
+      synthBtn.classList.remove('btn-primary');
+      if (!isMicRunning) {
+        statusBadge.classList.remove('active');
+        statusText.textContent = 'Microphone Idle';
+      }
+    }
+
+    function handleResize() {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.round(rect.width * dpr);
+      canvas.height = Math.round(rect.height * dpr);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.scale(dpr, dpr);
+    }
+
+    window.addEventListener('resize', handleResize);
+    handleResize();
+
+    canvas.addEventListener('mousemove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const barSpacing = rect.width / (NUM_BARS + 1);
+      const idx = Math.floor(x / barSpacing) - 1;
+
+      if (idx >= 0 && idx < NUM_BARS && bands[idx]) {
+        const item = bands[idx];
+        hoverNote.textContent = item.name;
+        hoverIndex.textContent = `MIDI Note ${item.m}`;
+        hoverFreq.textContent = `${item.fCenter < 100 ? item.fCenter.toFixed(1) : Math.round(item.fCenter)} Hz`;
+        hoverCard.classList.add('visible');
+      } else {
+        hoverCard.classList.remove('visible');
+      }
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+      hoverCard.classList.remove('visible');
+    });
+
+    micBtn.addEventListener('click', () => {
+      if (isMicRunning) stopMicrophone();
+      else startMicrophone();
+    });
+
+    synthBtn.addEventListener('click', toggleSynth);
+    startPrompt.addEventListener('click', () => startMicrophone());
+
+    function render() {
+      const rect = canvas.getBoundingClientRect();
+      const width = rect.width;
+      const height = rect.height;
+      const centerY = height / 2;
+
+      ctx.clearRect(0, 0, width, height);
+
+      let maxFftLevel = 0.0;
+
+      if (analyser && freqData) {
+        analyser.getByteFrequencyData(freqData);
+
+        for (let m = 0; m < NUM_BARS; m++) {
+          const band = bands[m];
+          if (!band) continue;
+
+          let maxVal = 0;
+          let sumVal = 0;
+          let count = 0;
+
+          const end = Math.min(freqData.length, band.endBin);
+          for (let b = band.startBin; b < end; b++) {
+            const val = freqData[b];
+            if (val > maxVal) maxVal = val;
+            sumVal += val;
+            count++;
+          }
+
+          const avgVal = count > 0 ? sumVal / count : 0;
+          const blended = (0.75 * maxVal + 0.25 * avgVal) / 255.0;
+          let signal = blended * band.weight * band.subFilter;
+
+          const NOISE_FLOOR = 0.055;
+          if (signal <= NOISE_FLOOR) {
+            signal = 0.0;
+          } else {
+            signal = (signal - NOISE_FLOOR) / (1.0 - NOISE_FLOOR);
+            signal = Math.min(1.0, Math.pow(signal, 0.76) * 1.38);
+          }
+
+          rawTargets[m] = signal;
+          if (signal > maxFftLevel) maxFftLevel = signal;
+        }
+      } else {
+        rawTargets.fill(0);
+      }
+
+      // Spatial smoothing
+      for (let m = 0; m < NUM_BARS; m++) {
+        const left = m > 0 ? rawTargets[m - 1] : rawTargets[m];
+        const center = rawTargets[m];
+        const right = m < NUM_BARS - 1 ? rawTargets[m + 1] : rawTargets[m];
+        smoothedTargets[m] = 0.18 * left + 0.64 * center + 0.18 * right;
+      }
+
+      // Attack & Decay
+      const ATTACK_RATE = 0.65;
+      const DECAY_RATE = 0.22;
+
+      let maxActiveLevel = 0.0;
+      for (let m = 0; m < NUM_BARS; m++) {
+        const target = smoothedTargets[m];
+        if (target > currentLevels[m]) {
+          currentLevels[m] += (target - currentLevels[m]) * ATTACK_RATE;
+        } else {
+          currentLevels[m] += (target - currentLevels[m]) * DECAY_RATE;
+          if (currentLevels[m] < 0.012) currentLevels[m] = 0.0;
+        }
+        if (currentLevels[m] > maxActiveLevel) maxActiveLevel = currentLevels[m];
+      }
+
+      // Draw Noise Cloud (from panel-1.png)
+      const cloudAmp = Math.max(0.12, maxActiveLevel);
+      for (let i = 0; i < noiseCloud.length; i++) {
+        const p = noiseCloud[i];
+        const px = p.xNorm * width;
+        const py = centerY + p.yNorm * (24 + cloudAmp * 32);
+        const pAlpha = p.baseAlpha * (0.6 + cloudAmp * 0.8);
+        ctx.fillStyle = `rgba(255, 255, 255, ${pAlpha.toFixed(3)})`;
+        ctx.beginPath();
+        ctx.arc(px, py, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Draw 128 Lime Bars (from panel-1.png)
+      const barSpacing = width / (NUM_BARS + 1);
+      const barWidth = Math.min(3.4, Math.max(2.2, barSpacing * 0.44));
+      const dotRadius = barWidth / 2;
+      const maxBarHeight = height * 0.78;
+
+      const LIME_COLOR = '#C6FF3D';
+      ctx.fillStyle = LIME_COLOR;
+      ctx.shadowColor = `rgba(198, 255, 61, ${(0.32 + maxActiveLevel * 0.45).toFixed(2)})`;
+      ctx.shadowBlur = 5 + maxActiveLevel * 9;
+
+      for (let m = 0; m < NUM_BARS; m++) {
+        const x = (m + 1) * barSpacing;
+        const amp = currentLevels[m];
+
+        if (amp <= 0.001) {
+          ctx.beginPath();
+          ctx.arc(x, centerY, dotRadius, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          const h = barWidth + amp * (maxBarHeight - barWidth);
+          const top = centerY - h / 2;
+
+          ctx.beginPath();
+          if (typeof ctx.roundRect === 'function') {
+            ctx.roundRect(x - dotRadius, top, barWidth, h, dotRadius);
+          } else {
+            ctx.arc(x, top + dotRadius, dotRadius, Math.PI, 0);
+            ctx.arc(x, top + h - dotRadius, dotRadius, 0, Math.PI);
+            ctx.closePath();
+          }
+          ctx.fill();
+        }
+      }
+
+      ctx.shadowBlur = 0;
+      requestAnimationFrame(render);
+    }
+
+    computeBands(48000);
+    requestAnimationFrame(render);
+  </script>
+</body>
+</html>

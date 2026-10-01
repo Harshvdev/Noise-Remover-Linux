@@ -1,0 +1,397 @@
+<script lang="ts">
+  import { onMount, onDestroy } from 'svelte';
+  import { api } from './api';
+  import type { TrackMetadata } from './types';
+  import WaveformLive from './WaveformLive.svelte';
+  import RecordButton from './RecordButton.svelte';
+  import CountdownOverlay from './CountdownOverlay.svelte';
+  import NewRecordingCard from './NewRecordingCard.svelte';
+  import { Settings, List } from '@lucide/svelte';
+
+  export let onNavigateRecordings: () => void;
+  export let onNavigateTrackDetail: (trackId: string) => void;
+  export let onOpenSettings: () => void;
+
+  let isRecording = false;
+  let isCalibrating = false;
+  let isCountingDown = false;
+  let micLevel = 0.0;
+  let liveSpectrum: number[] = new Array(128).fill(0);
+  let elapsedSecs = 0.0;
+  let timerInterval: ReturnType<typeof setInterval>;
+  let statsPollInterval: ReturnType<typeof setInterval>;
+
+  let latestRecording: TrackMetadata | null = null;
+  let isLatestPlaying = false;
+  let latestPlaybackPos = 0.0;
+  let playbackTicker: ReturnType<typeof setInterval>;
+
+  onMount(async () => {
+    // Poll mic stats periodically for real-time responsiveness
+    statsPollInterval = setInterval(async () => {
+      try {
+        const stats = await api.getMicStats();
+        // Convert peak_dbfs (-55 to -10) to 0.0 - 1.0 linear level
+        const norm = Math.max(0, (stats.peak_dbfs + 55) / 45);
+        micLevel = Math.min(1.0, norm);
+        if (stats.spectrum && stats.spectrum.length === 128) {
+          liveSpectrum = stats.spectrum;
+        }
+      } catch (e) {
+        // fallback in preview when backend not connected
+        micLevel = 0.0;
+      }
+    }, 35);
+
+    // Load most recent track for bottom-left preview card
+    try {
+      const tracks = await api.getTracks();
+      if (tracks.length > 0) {
+        latestRecording = tracks[0];
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  });
+
+  onDestroy(() => {
+    if (timerInterval) clearInterval(timerInterval);
+    if (statsPollInterval) clearInterval(statsPollInterval);
+    if (playbackTicker) clearInterval(playbackTicker);
+  });
+
+  function formatTimer(secs: number): string {
+    const mins = Math.floor(secs / 60);
+    const s = Math.floor(secs % 60);
+    const ms = Math.floor((secs % 1) * 10);
+    const mStr = String(mins).padStart(2, '0');
+    const sStr = String(s).padStart(2, '0');
+    return `${mStr}:${sStr}.${ms}`;
+  }
+
+  async function handleRecordClick() {
+    if (isRecording) {
+      // Stop recording
+      if (timerInterval) clearInterval(timerInterval);
+      isRecording = false;
+      try {
+        const track = await api.stopRecording();
+        latestRecording = track;
+      } catch (e) {
+        console.error('Error stopping recording:', e);
+      }
+    } else {
+      // Start 3-second calibration countdown
+      try {
+        await api.prepareRecordingSession();
+      } catch (e) {
+        console.warn('Prepare session error:', e);
+      }
+      isCountingDown = true;
+    }
+  }
+
+  async function handleCountdownComplete() {
+    isCountingDown = false;
+    isCalibrating = false;
+    isRecording = true;
+    elapsedSecs = 0.0;
+
+    try {
+      await api.startRecording();
+    } catch (e) {
+      console.warn('Start recording error:', e);
+    }
+
+    timerInterval = setInterval(() => {
+      elapsedSecs += 0.1;
+    }, 100);
+  }
+
+  function handleCountdownCancel() {
+    isCountingDown = false;
+    isCalibrating = false;
+    isRecording = false;
+  }
+
+  async function handleLatestPlayToggle(e: MouseEvent) {
+    e.stopPropagation();
+    if (!latestRecording) return;
+    if (isLatestPlaying) {
+      await api.pauseTrack();
+      isLatestPlaying = false;
+      if (playbackTicker) clearInterval(playbackTicker);
+    } else {
+      await api.playTrack(latestRecording.id, true);
+      isLatestPlaying = true;
+      latestPlaybackPos = 0;
+      if (playbackTicker) clearInterval(playbackTicker);
+      playbackTicker = setInterval(() => {
+        if (!isLatestPlaying || !latestRecording) {
+          if (playbackTicker) clearInterval(playbackTicker);
+          return;
+        }
+        latestPlaybackPos += 0.2;
+        if (latestPlaybackPos >= latestRecording.duration_secs) {
+          latestPlaybackPos = 0;
+          isLatestPlaying = false;
+          if (playbackTicker) clearInterval(playbackTicker);
+        }
+      }, 200);
+    }
+  }
+
+  async function handleLatestFavorite(e: MouseEvent) {
+    e.stopPropagation();
+    if (!latestRecording) return;
+    try {
+      const fav = await api.toggleFavorite(latestRecording.id);
+      latestRecording.is_favorite = fav;
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  function handleDismissLatest(e: MouseEvent) {
+    e.stopPropagation();
+    latestRecording = null;
+  }
+</script>
+
+<div class="panel-home">
+  <!-- Top Navigation Header -->
+  <header class="home-header">
+    <div class="brand-group">
+      <!-- Waveform Icon (Brand logo left untouched as requested) -->
+      <div class="header-logo">
+        <span class="bar bar-1"></span>
+        <span class="bar bar-2"></span>
+        <span class="bar bar-3"></span>
+        <span class="bar bar-4"></span>
+        <span class="bar bar-5"></span>
+      </div>
+      <div class="brand-text">
+        <h1 class="brand-title">Voice Cleaner</h1>
+        <p class="brand-subtitle">Clear Voice. Pure Sound.</p>
+      </div>
+    </div>
+
+    <!-- Settings Button (matching panel-1.png squircle style) -->
+    <button class="btn-nav" onclick={onOpenSettings}>
+      <Settings size={18} color="rgba(255,255,255,0.9)" />
+      <span>Settings</span>
+    </button>
+  </header>
+
+  <!-- Center Hero Area -->
+  <main class="home-center">
+    <!-- Horizontal Live Waveform with Noise Cloud (UNTOUCHED) -->
+    <div class="live-wave-wrapper">
+      <WaveformLive {isRecording} {isCalibrating} level={micLevel} spectrum={liveSpectrum} />
+    </div>
+
+    <!-- Big Timer -->
+    <div class="timer-display tabular-nums">
+      {formatTimer(elapsedSecs)}
+    </div>
+
+    <!-- Red Circular Record Button with Concentric Outer Level Ring -->
+    <RecordButton
+      {isRecording}
+      {isCalibrating}
+      level={micLevel}
+      onToggle={handleRecordClick}
+    />
+  </main>
+
+  <!-- Bottom Navigation Row -->
+  <footer class="home-footer">
+    <div class="footer-left">
+      {#if latestRecording}
+        <NewRecordingCard
+          track={latestRecording}
+          isPlaying={isLatestPlaying}
+          currentPosSecs={latestPlaybackPos}
+          onPlayToggle={handleLatestPlayToggle}
+          onFavoriteToggle={handleLatestFavorite}
+          onClose={handleDismissLatest}
+          onOpenDetail={() => onNavigateTrackDetail(latestRecording!.id)}
+        />
+      {/if}
+    </div>
+
+    <div class="footer-right">
+      <!-- Recordings List Button with Lime Green List Icon matching panel-1.png -->
+      <button class="btn-nav" onclick={onNavigateRecordings}>
+        <List size={18} color="#C6FF3D" strokeWidth={2.4} />
+        <span>Recordings List</span>
+      </button>
+    </div>
+  </footer>
+
+  <!-- 3-Second Calibration Countdown Overlay -->
+  {#if isCountingDown}
+    <CountdownOverlay
+      onComplete={handleCountdownComplete}
+      onCancel={handleCountdownCancel}
+    />
+  {/if}
+</div>
+
+<style>
+  .panel-home {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 24px 36px;
+    background-color: var(--bg-app);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .home-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    z-index: 10;
+  }
+
+  .brand-group {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  /* Brand Logo bars left untouched as requested */
+  .header-logo {
+    display: flex;
+    align-items: center;
+    gap: 3.5px;
+    height: 32px;
+  }
+
+  .header-logo .bar {
+    width: 4px;
+    background-color: var(--accent-lime);
+    border-radius: 9999px;
+  }
+
+  .header-logo .bar-1 { height: 14px; }
+  .header-logo .bar-2 { height: 26px; }
+  .header-logo .bar-3 { height: 32px; }
+  .header-logo .bar-4 { height: 22px; }
+  .header-logo .bar-5 { height: 12px; }
+
+  .brand-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .brand-title {
+    font-family: var(--font-brand);
+    font-size: 24px;
+    font-weight: 700;
+    color: #FFFFFF;
+    letter-spacing: -0.5px;
+  }
+
+  .brand-subtitle {
+    font-size: 13.5px;
+    color: rgba(255, 255, 255, 0.45);
+    font-weight: 400;
+  }
+
+  /* Squircle nav buttons matching panel-1.png */
+  .btn-nav {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    background: #141417;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #FFFFFF;
+    padding: 9px 18px;
+    border-radius: 14px;
+    font-size: 13.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .btn-nav:hover {
+    background: #1B1B1F;
+    border-color: rgba(255, 255, 255, 0.15);
+    transform: translateY(-1px);
+  }
+
+  .btn-nav:active {
+    transform: translateY(0);
+  }
+
+  .home-center {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    gap: 16px;
+  }
+
+  .live-wave-wrapper {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+  }
+
+  .timer-display {
+    font-family: var(--font-brand);
+    font-size: 80px;
+    font-weight: 700;
+    color: #FFFFFF;
+    letter-spacing: -1.5px;
+    line-height: 1;
+    margin: 2px 0 10px 0;
+  }
+
+  .home-footer {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    width: 100%;
+    z-index: 10;
+  }
+
+  .footer-left {
+    min-height: 90px;
+    display: flex;
+    align-items: flex-end;
+  }
+
+  .footer-right {
+    display: flex;
+    align-items: flex-end;
+  }
+
+  /* Responsive Scaling */
+  @media (max-width: 1024px) {
+    .panel-home {
+      padding: 20px 24px;
+    }
+    .timer-display {
+      font-size: 64px;
+    }
+  }
+
+  @media (max-height: 680px) {
+    .timer-display {
+      font-size: 56px;
+      margin: 0;
+    }
+    .home-center {
+      gap: 12px;
+    }
+  }
+</style>

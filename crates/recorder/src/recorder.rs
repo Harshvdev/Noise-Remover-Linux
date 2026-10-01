@@ -37,6 +37,7 @@ pub struct RecorderStatus {
     pub dropped_samples: usize,
     pub is_saving: bool,
     pub last_error: Option<String>,
+    pub spectrum: Vec<f32>,
 }
 
 pub struct AudioRecorder {
@@ -107,14 +108,16 @@ impl AudioRecorder {
         self.selected_device_idx
     }
 
-    /// Select default device.
+    /// Select default device, prioritizing Wired External > Bluetooth > Internal.
     pub fn select_default_device(&mut self) -> Result<(), RecorderError> {
         self.stop_stream();
         *self.last_stream_error.lock().unwrap() = None;
 
         let pw_sources = DeviceManager::get_pipewire_sources();
         if !pw_sources.is_empty() {
-            let def_idx = pw_sources.iter().position(|s| s.is_default).unwrap_or(0);
+            // Sources are sorted by priority: Wired External (0) > Bluetooth (1) > Internal (2)
+            // Index 0 is guaranteed to be the highest priority available input
+            let def_idx = 0;
             self.selected_device_idx = Some(def_idx);
             let _ = self.device_manager.select_pipewire_source(def_idx);
         }
@@ -142,6 +145,11 @@ impl AudioRecorder {
 
     /// Select an input device by index and start real-time monitoring (level meter).
     pub fn select_device(&mut self, index: usize) -> Result<(), RecorderError> {
+        if self.selected_device_idx == Some(index) && self.stream.is_some() {
+            // Already active and capturing on this device, fast-path return
+            return Ok(());
+        }
+
         self.stop_stream();
         *self.last_stream_error.lock().unwrap() = None;
 
@@ -238,6 +246,8 @@ impl AudioRecorder {
         let is_saving = self.is_saving.load(Ordering::Relaxed);
         let last_error = self.last_stream_error.lock().unwrap().clone();
 
+        let spectrum = self.meter.spectrum_128(sample_rate);
+
         RecorderStatus {
             mode,
             sample_rate,
@@ -250,6 +260,7 @@ impl AudioRecorder {
             dropped_samples,
             is_saving,
             last_error,
+            spectrum,
         }
     }
 

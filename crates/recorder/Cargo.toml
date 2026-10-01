@@ -10,3 +10,4 @@ ringbuf.workspace = true
 hound.workspace = true
 thiserror.workspace = true
 log.workspace = true
+realfft.workspace = true

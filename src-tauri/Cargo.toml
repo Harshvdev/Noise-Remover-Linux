@@ -1,0 +1,27 @@
+[package]
+name = "voice-cleaner"
+version = "0.1.0"
+description = "Voice Cleaner Desktop"
+edition = "2021"
+
+[lib]
+name = "voice_cleaner_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.0", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.12.0", features = [] }
+tauri-plugin-log = "2"
+audio-core = { path = "../crates/audio-core" }
+recorder = { path = "../crates/recorder" }
+playback = { path = "../crates/playback" }
+dsp = { path = "../crates/dsp" }
+denoiser = { path = "../crates/denoiser" }
+hound = "3.5"
+rfd = "0.15"
+cpal = "0.18"

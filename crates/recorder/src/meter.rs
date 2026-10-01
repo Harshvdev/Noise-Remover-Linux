@@ -1,7 +1,8 @@
-//! Atomic real-time audio level and clipping monitor.
-
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
+use realfft::RealFftPlanner;
+
+pub const FFT_WINDOW_SIZE: usize = 2048;
 
 #[derive(Debug)]
 pub struct AudioMeter {
@@ -15,16 +16,27 @@ pub struct AudioMeter {
     prev_in_bits: AtomicU32,
     /// Previous output sample for 1-pole DC blocker.
     prev_out_bits: AtomicU32,
+    /// Lock-free circular sample ring for real-time spectral analysis.
+    sample_ring: Box<[AtomicU32; FFT_WINDOW_SIZE]>,
+    write_pos: AtomicUsize,
 }
 
 impl AudioMeter {
     pub fn new() -> Arc<Self> {
+        let mut ring = Vec::with_capacity(FFT_WINDOW_SIZE);
+        for _ in 0..FFT_WINDOW_SIZE {
+            ring.push(AtomicU32::new(0));
+        }
+        let sample_ring: Box<[AtomicU32; FFT_WINDOW_SIZE]> = ring.into_boxed_slice().try_into().unwrap();
+
         Arc::new(Self {
             peak_bits: AtomicU32::new(0.0f32.to_bits()),
             rms_bits: AtomicU32::new(0.0f32.to_bits()),
             clipping_count: AtomicU32::new(0),
             prev_in_bits: AtomicU32::new(0.0f32.to_bits()),
             prev_out_bits: AtomicU32::new(0.0f32.to_bits()),
+            sample_ring,
+            write_pos: AtomicUsize::new(0),
         })
     }
 
@@ -35,6 +47,12 @@ impl AudioMeter {
     pub fn update(&self, samples: &[f32]) {
         if samples.is_empty() {
             return;
+        }
+
+        // Store samples into lock-free circular ring buffer for real-time FFT
+        for &s in samples {
+            let idx = self.write_pos.fetch_add(1, Ordering::Relaxed) % FFT_WINDOW_SIZE;
+            self.sample_ring[idx].store(s.to_bits(), Ordering::Relaxed);
         }
 
         let mut peak = 0.0f32;
@@ -121,6 +139,93 @@ impl AudioMeter {
     /// Returns whether any clipping occurred and resets the counter.
     pub fn take_clipping(&self) -> bool {
         self.clipping_count.swap(0, Ordering::Relaxed) > 0
+    }
+
+    /// Computes the genuine 128-band frequency spectrum corresponding to the 128 MIDI notes (0..127)
+    /// using real-time FFT over the most recent hardware microphone samples.
+    pub fn spectrum_128(&self, sample_rate: u32) -> Vec<f32> {
+        let sr = if sample_rate > 0 { sample_rate as f32 } else { 48000.0 };
+        let write_idx = self.write_pos.load(Ordering::Relaxed);
+        let mut time_buf = [0.0f32; FFT_WINDOW_SIZE];
+
+        // Read the most recent samples in chronological order
+        for i in 0..FFT_WINDOW_SIZE {
+            let idx = (write_idx + i) % FFT_WINDOW_SIZE;
+            let s = f32::from_bits(self.sample_ring[idx].load(Ordering::Relaxed));
+            // Hann window to eliminate spectral leakage
+            let window = 0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (FFT_WINDOW_SIZE as f32 - 1.0)).cos());
+            time_buf[i] = if s.is_finite() { s * window } else { 0.0 };
+        }
+
+        let mut planner = RealFftPlanner::<f32>::new();
+        let r2c = planner.plan_fft_forward(FFT_WINDOW_SIZE);
+        let mut out_spec = r2c.make_output_vec();
+        if r2c.process(&mut time_buf, &mut out_spec).is_err() {
+            return vec![0.0; 128];
+        }
+
+        let bin_hz = sr / FFT_WINDOW_SIZE as f32; // ~23.44 Hz per bin
+        let mut result = Vec::with_capacity(128);
+
+        const NOISE_GATE_DB: f32 = -70.0;
+        const MAX_DB: f32 = -16.0;
+
+        for m in 0..128 {
+            // 128 MIDI notes (0 to 127): f(m) = 440 * 2^((m - 69) / 12)
+            let f_center = 440.0 * 2.0f32.powf((m as f32 - 69.0) / 12.0);
+            let f_low = 440.0 * 2.0f32.powf((m as f32 - 0.5 - 69.0) / 12.0);
+            let f_high = 440.0 * 2.0f32.powf((m as f32 + 0.5 - 69.0) / 12.0);
+
+            let k_start = ((f_low / bin_hz).floor() as usize).max(1);
+            let k_end = ((f_high / bin_hz).ceil() as usize).max(k_start + 1).min(out_spec.len() - 1);
+
+            let mut max_mag = 0.0f32;
+            let mut sum_mag = 0.0f32;
+            let mut count = 0;
+
+            for k in k_start..=k_end {
+                let c = out_spec[k];
+                let mag = (c.re * c.re + c.im * c.im).sqrt();
+                if mag > max_mag {
+                    max_mag = mag;
+                }
+                sum_mag += mag;
+                count += 1;
+            }
+
+            let avg_mag = if count > 0 { sum_mag / count as f32 } else { 0.0 };
+            let blended = 0.75 * max_mag + 0.25 * avg_mag;
+            let norm_mag = blended / 1024.0;
+
+            // Equal-loudness tilt compensation
+            let norm_m = m as f32 / 127.0;
+            let weight = 0.90 + norm_m.powf(0.72) * 0.55;
+
+            // Sub-bass filter: Notes below 35Hz (< m=24)
+            let sub_filter = if f_center < 18.0 {
+                0.0
+            } else if f_center < 40.0 {
+                ((f_center - 18.0) / 22.0).powf(1.6)
+            } else {
+                1.0
+            };
+
+            let note_db = if norm_mag > 1e-6 {
+                20.0 * norm_mag.log10()
+            } else {
+                -96.0
+            };
+
+            if note_db <= NOISE_GATE_DB {
+                result.push(0.0);
+            } else {
+                let norm = ((note_db - NOISE_GATE_DB) / (MAX_DB - NOISE_GATE_DB)).clamp(0.0, 1.0);
+                let val = (norm.powf(0.78) * 1.35 * weight * sub_filter).clamp(0.0, 1.0);
+                result.push(val);
+            }
+        }
+
+        result
     }
 }
 

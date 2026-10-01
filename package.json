@@ -1,0 +1,9 @@
+{
+  "name": "noise-remover-linux",
+  "private": true,
+  "scripts": {
+    "dev": "cd frontend && bun run dev",
+    "build": "cd frontend && bun run build",
+    "tauri": "./frontend/node_modules/.bin/tauri"
+  }
+}
