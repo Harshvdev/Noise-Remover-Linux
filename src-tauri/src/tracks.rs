@@ -22,6 +22,21 @@ pub struct TrackMetadata {
     pub clean_waveform: Vec<f32>,
 }
 
+pub fn get_audio_duration_secs(path: &Path) -> Option<f32> {
+    if let Ok(reader) = hound::WavReader::open(path) {
+        let spec = reader.spec();
+        if spec.sample_rate > 0 {
+            return Some(reader.duration() as f32 / spec.sample_rate as f32);
+        }
+    }
+    if let Ok((samples, spec)) = audio_core::read_wav_canonical_f32(path) {
+        if spec.sample_rate > 0 {
+            return Some(samples.len() as f32 / spec.sample_rate as f32);
+        }
+    }
+    None
+}
+
 pub struct TrackManager {
     base_dir: PathBuf,
 }
@@ -30,9 +45,7 @@ impl TrackManager {
     pub fn new<P: AsRef<Path>>(base_dir: P) -> Self {
         let dir = base_dir.as_ref().to_path_buf();
         fs::create_dir_all(&dir).ok();
-        let manager = Self { base_dir: dir };
-        manager.ensure_seed_tracks();
-        manager
+        Self { base_dir: dir }
     }
 
     #[allow(dead_code)]
@@ -50,11 +63,130 @@ impl TrackManager {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_dir() {
+                    let orig_file = path.join("original.wav");
+                    let clean_file = path.join("cleaned.wav");
+
+                    let has_orig = orig_file.is_file()
+                        && orig_file.metadata().map(|m| m.len() > 0).unwrap_or(false);
+                    let has_clean = clean_file.is_file()
+                        && clean_file.metadata().map(|m| m.len() > 0).unwrap_or(false);
+
+                    // Only show tracks that actually have recorded audio files inside the app's directory
+                    if !has_orig && !has_clean {
+                        continue;
+                    }
+
+                    let audio_file = if has_clean { &clean_file } else { &orig_file };
+
                     let meta_path = path.join("meta.json");
-                    if let Ok(content) = fs::read_to_string(&meta_path) {
-                        if let Ok(meta) = serde_json::from_str::<TrackMetadata>(&content) {
-                            tracks.push(meta);
+                    let track_id = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("track")
+                        .to_string();
+
+                    let mut meta = if let Ok(content) = fs::read_to_string(&meta_path) {
+                        serde_json::from_str::<TrackMetadata>(&content).ok()
+                    } else {
+                        None
+                    };
+
+                    let mut needs_save = false;
+
+                    // If meta.json is missing, reconstruct it from the audio file
+                    if meta.is_none() {
+                        let mut duration_secs = 0.0;
+                        let mut waveform = Vec::new();
+                        if let Some(dur) = get_audio_duration_secs(audio_file) {
+                            duration_secs = dur;
+                        } else if let Ok((samples, spec)) =
+                            audio_core::read_wav_canonical_f32(audio_file)
+                        {
+                            if spec.sample_rate > 0 {
+                                duration_secs = samples.len() as f32 / spec.sample_rate as f32;
+                            }
                         }
+                        if let Ok((samples, _)) = audio_core::read_wav_canonical_f32(audio_file) {
+                            waveform = compute_waveform_peaks(&samples, 120);
+                        }
+                        let mins = (duration_secs / 60.0).floor() as u32;
+                        let secs = (duration_secs % 60.0).floor() as u32;
+                        let dur_fmt = format!("{:02}:{:02}", mins, secs);
+
+                        let new_meta = TrackMetadata {
+                            id: track_id.clone(),
+                            title: track_id.replace('_', " "),
+                            created_at: "Recorded".to_string(),
+                            timestamp: path
+                                .metadata()
+                                .and_then(|m| m.modified())
+                                .ok()
+                                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                .map(|d| d.as_secs())
+                                .unwrap_or(0),
+                            duration_secs,
+                            formatted_duration: dur_fmt,
+                            is_favorite: false,
+                            has_raw: has_orig,
+                            has_clean,
+                            model_used: "DPDFNet2 (High Quality)".to_string(),
+                            raw_waveform: waveform.clone(),
+                            clean_waveform: waveform,
+                        };
+                        needs_save = true;
+                        meta = Some(new_meta);
+                    }
+
+                    if let Some(mut m) = meta {
+                        m.has_raw = has_orig;
+                        m.has_clean = has_clean;
+
+                        // Ensure duration matches actual audio file on disk
+                        if let Some(real_dur) = get_audio_duration_secs(audio_file) {
+                            if (m.duration_secs - real_dur).abs() > 0.5 || m.formatted_duration.is_empty() {
+                                m.duration_secs = real_dur;
+                                let mins = (real_dur / 60.0).floor() as u32;
+                                let secs = (real_dur % 60.0).floor() as u32;
+                                m.formatted_duration = format!("{:02}:{:02}", mins, secs);
+                                needs_save = true;
+                            }
+                        }
+
+                        // Recompute raw waveform if empty or flat dummy
+                        let is_flat_raw = m.raw_waveform.is_empty()
+                            || (m.raw_waveform.len() > 1
+                                && m.raw_waveform
+                                    .iter()
+                                    .all(|&v| (v - m.raw_waveform[0]).abs() < 1e-4));
+                        if is_flat_raw && has_orig {
+                            if let Ok((samples, _)) =
+                                audio_core::read_wav_canonical_f32(&orig_file)
+                            {
+                                m.raw_waveform = compute_waveform_peaks(&samples, 120);
+                                needs_save = true;
+                            }
+                        }
+
+                        // Recompute clean waveform if empty or flat dummy
+                        let is_flat_clean = m.clean_waveform.is_empty()
+                            || (m.clean_waveform.len() > 1
+                                && m.clean_waveform
+                                    .iter()
+                                    .all(|&v| (v - m.clean_waveform[0]).abs() < 1e-4));
+                        if is_flat_clean && has_clean {
+                            if let Ok((samples, _)) =
+                                audio_core::read_wav_canonical_f32(&clean_file)
+                            {
+                                m.clean_waveform = compute_waveform_peaks(&samples, 120);
+                                needs_save = true;
+                            }
+                        }
+
+                        if needs_save {
+                            let _ = self.save_track(&m);
+                        }
+
+                        tracks.push(m);
                     }
                 }
             }
@@ -65,10 +197,32 @@ impl TrackManager {
     }
 
     pub fn get_track(&self, id: &str) -> Option<TrackMetadata> {
-        let meta_path = self.get_track_dir(id).join("meta.json");
-        fs::read_to_string(meta_path)
+        let dir = self.get_track_dir(id);
+        let meta_path = dir.join("meta.json");
+        let mut meta: TrackMetadata = fs::read_to_string(&meta_path)
             .ok()
-            .and_then(|c| serde_json::from_str(&c).ok())
+            .and_then(|c| serde_json::from_str(&c).ok())?;
+
+        let orig_file = dir.join("original.wav");
+        let clean_file = dir.join("cleaned.wav");
+        let has_orig = orig_file.is_file();
+        let has_clean = clean_file.is_file();
+        if !has_orig && !has_clean {
+            return None;
+        }
+        let audio_file = if has_clean { &clean_file } else { &orig_file };
+
+        if let Some(real_dur) = get_audio_duration_secs(audio_file) {
+            if (meta.duration_secs - real_dur).abs() > 0.5 || meta.formatted_duration.is_empty() {
+                meta.duration_secs = real_dur;
+                let mins = (real_dur / 60.0).floor() as u32;
+                let secs = (real_dur % 60.0).floor() as u32;
+                meta.formatted_duration = format!("{:02}:{:02}", mins, secs);
+                let _ = self.save_track(&meta);
+            }
+        }
+
+        Some(meta)
     }
 
     pub fn save_track(&self, meta: &TrackMetadata) -> Result<(), String> {
@@ -100,73 +254,5 @@ impl TrackManager {
         track.title = new_title.to_string();
         self.save_track(&track)?;
         Ok(())
-    }
-
-    /// Pre-populate tracks from `misc/*.wav` if the recordings directory has no tracks
-    fn ensure_seed_tracks(&self) {
-        let existing = self.list_tracks();
-        if !existing.is_empty() {
-            return;
-        }
-
-        let seed_sources = [
-            ("Track 01", "Mon, Oct 27, 2025 • 12:14", 1761567240, true, "misc/original.wav", "misc/deep_cleaned.wav", 134.0, "02:14"),
-            ("Track 02", "Sun, Oct 26, 2025 • 18:03", 1761501780, false, "misc/test_sample.wav", "misc/dsp_cleaned.wav", 96.0, "01:36"),
-            ("Track 03", "Sat, Oct 25, 2025 • 10:21", 1761387660, true, "misc/original.wav", "misc/deep_cleaned.wav", 188.0, "03:08"),
-            ("Track 04", "Fri, Oct 24, 2025 • 22:17", 1761344220, false, "misc/test_10s.wav", "misc/out_adapt.wav", 54.0, "00:54"),
-            ("Track 05", "Thu, Oct 23, 2025 • 15:09", 1761232140, false, "misc/original.wav", "misc/deep_cleaned.wav", 261.0, "04:21"),
-            ("Track 06", "Wed, Oct 22, 2025 • 09:33", 1761125580, true, "misc/test_sample.wav", "misc/dsp_cleaned.wav", 108.0, "01:48"),
-            ("Track 07", "Tue, Oct 21, 2025 • 16:05", 1761062700, false, "misc/original.wav", "misc/out_pure.wav", 157.0, "02:37"),
-        ];
-
-        for (i, (title, date_str, ts, is_fav, raw_src, clean_src, duration, dur_fmt)) in seed_sources.iter().enumerate() {
-            let id = format!("track_{:02}", i + 1);
-            let dir = self.get_track_dir(&id);
-            fs::create_dir_all(&dir).ok();
-
-            let orig_dest = dir.join("original.wav");
-            let clean_dest = dir.join("cleaned.wav");
-
-            let mut raw_wave = Vec::new();
-            let mut clean_wave = Vec::new();
-
-            if Path::new(raw_src).exists() {
-                fs::copy(raw_src, &orig_dest).ok();
-                if let Ok((samples, _)) = audio_core::read_wav_canonical_f32(&orig_dest) {
-                    raw_wave = compute_waveform_peaks(&samples, 120);
-                }
-            }
-
-            if Path::new(clean_src).exists() {
-                fs::copy(clean_src, &clean_dest).ok();
-                if let Ok((samples, _)) = audio_core::read_wav_canonical_f32(&clean_dest) {
-                    clean_wave = compute_waveform_peaks(&samples, 120);
-                }
-            }
-
-            if raw_wave.is_empty() {
-                raw_wave = vec![0.3; 120];
-            }
-            if clean_wave.is_empty() {
-                clean_wave = raw_wave.clone();
-            }
-
-            let meta = TrackMetadata {
-                id: id.clone(),
-                title: title.to_string(),
-                created_at: date_str.to_string(),
-                timestamp: *ts,
-                duration_secs: *duration,
-                formatted_duration: dur_fmt.to_string(),
-                is_favorite: *is_fav,
-                has_raw: orig_dest.exists(),
-                has_clean: clean_dest.exists(),
-                model_used: "DPDFNet2 (High Quality)".to_string(),
-                raw_waveform: raw_wave,
-                clean_waveform: clean_wave,
-            };
-
-            let _ = self.save_track(&meta);
-        }
     }
 }

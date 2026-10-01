@@ -13,10 +13,15 @@
   let filter: 'all' | 'favorites' = 'all';
   let dateSortDesc = true;
 
-  let activeTrackId: string | null = 'track_01';
-  let isPlaying = true;
-  let currentPosSecs = 42;
+  let activeTrackId: string | null = null;
+  let isPlaying = false;
+  let currentPosSecs = 0;
   let statusPollInterval: ReturnType<typeof setInterval>;
+  let animFrameId: number;
+  let lastFrameTime = performance.now();
+
+  let isScrubbing = false;
+  let pendingSeekExpires = 0;
 
   async function loadTracks() {
     try {
@@ -26,28 +31,69 @@
     }
   }
 
-  onMount(() => {
-    loadTracks();
+  function updatePlayhead() {
+    const now = performance.now();
+    const dt = (now - lastFrameTime) / 1000;
+    lastFrameTime = now;
 
-    statusPollInterval = setInterval(async () => {
-      try {
-        const status = await api.getPlaybackStatus();
-        if (status.track_id) {
-          isPlaying = status.is_playing;
-          currentPosSecs = status.position_seconds;
-          activeTrackId = status.track_id;
-        }
-      } catch (e) {
-        // fallback in dev
-        if (isPlaying) {
-          currentPosSecs = (currentPosSecs + 0.2) % 134;
+    if (isPlaying && !isScrubbing && activeTrackId) {
+      const curTrack = tracks.find((t) => t.id === activeTrackId);
+      const maxDur = curTrack?.duration_secs || 0;
+      if (maxDur > 0) {
+        currentPosSecs = Math.min(maxDur, currentPosSecs + dt);
+        if (currentPosSecs >= maxDur) {
+          isPlaying = false;
         }
       }
-    }, 200);
+    }
+
+    animFrameId = requestAnimationFrame(updatePlayhead);
+  }
+
+  onMount(() => {
+    loadTracks();
+    lastFrameTime = performance.now();
+    animFrameId = requestAnimationFrame(updatePlayhead);
+
+    statusPollInterval = setInterval(async () => {
+      if (isScrubbing) return;
+      try {
+        const status = await api.getPlaybackStatus();
+        if (isScrubbing) return;
+
+        if (status.track_id) {
+          if (activeTrackId !== status.track_id) {
+            activeTrackId = status.track_id;
+            currentPosSecs = status.position_seconds;
+          }
+          isPlaying = status.is_playing;
+
+          // Reject stale pre-seek status reports from previously in-flight queries
+          if (pendingSeekExpires > Date.now()) {
+            const diff = Math.abs(status.position_seconds - currentPosSecs);
+            if (diff <= 0.75) {
+              // Backend has caught up with seek
+              pendingSeekExpires = 0;
+              currentPosSecs = status.position_seconds;
+            }
+          } else {
+            // Reconcile if paused or if subtle drift exceeds 0.2s
+            if (!isPlaying || Math.abs(status.position_seconds - currentPosSecs) > 0.2) {
+              currentPosSecs = status.position_seconds;
+            }
+          }
+        } else if (!status.is_playing) {
+          isPlaying = false;
+        }
+      } catch (e) {
+        // Fallback or ignore
+      }
+    }, 100);
   });
 
   onDestroy(() => {
     if (statusPollInterval) clearInterval(statusPollInterval);
+    if (animFrameId) cancelAnimationFrame(animFrameId);
   });
 
   async function handlePlayToggle(track: TrackMetadata, e: MouseEvent) {
@@ -56,9 +102,28 @@
       await api.pauseTrack();
       isPlaying = false;
     } else {
-      await api.playTrack(track.id, true);
+      lastFrameTime = performance.now();
+      await api.playTrack(track.id, true, currentPosSecs > 0 && activeTrackId === track.id ? currentPosSecs : undefined);
       activeTrackId = track.id;
       isPlaying = true;
+    }
+  }
+
+  async function handleSeek(track: TrackMetadata, sec: number, isFinal: boolean) {
+    const isNewTrack = activeTrackId !== track.id;
+    isScrubbing = !isFinal;
+    activeTrackId = track.id;
+    currentPosSecs = sec;
+    lastFrameTime = performance.now();
+
+    if (isFinal) {
+      pendingSeekExpires = Date.now() + 800;
+      if (isNewTrack) {
+        await api.playTrack(track.id, true, sec);
+        isPlaying = true;
+      } else {
+        await api.seekTrack(sec);
+      }
     }
   }
 
@@ -82,6 +147,7 @@
         await api.pauseTrack();
         activeTrackId = null;
         isPlaying = false;
+        currentPosSecs = 0;
       }
     } catch (e) {
       console.error(e);
@@ -96,13 +162,13 @@
 <div class="panel-recordings">
   <!-- Top Bar -->
   <header class="recordings-topbar">
-    <button class="btn-pill" onclick={onNavigateHome}>
+    <button class="btn-nav" onclick={onNavigateHome}>
       <ChevronLeft size={18} />
       <span>Back</span>
     </button>
 
-    <button class="btn-pill" onclick={onOpenSettings}>
-      <Settings size={17} color="rgba(255,255,255,0.85)" />
+    <button class="btn-nav" onclick={onOpenSettings}>
+      <Settings size={18} color="rgba(255,255,255,0.9)" />
       <span>Settings</span>
     </button>
   </header>
@@ -114,34 +180,42 @@
       <p class="page-subtitle">Manage your recordings, play, favorite or delete them.</p>
     </div>
 
-    <!-- Segmented Filter Control -->
+    <!-- Segmented Filter Control matching panel-2.png -->
     <div class="filter-controls">
       <button
-        class="filter-pill"
-        class:active-pill={filter === 'all'}
+        class="filter-tab"
+        class:active-tab={filter === 'all'}
         onclick={() => (filter = 'all')}
       >
-        <LayoutGrid size={15} />
+        <LayoutGrid size={15} color={filter === 'all' ? '#000000' : 'rgba(255,255,255,0.85)'} />
         <span>All</span>
       </button>
 
       <button
-        class="filter-pill"
-        class:active-pill={filter === 'favorites'}
+        class="filter-tab"
+        class:active-tab={filter === 'favorites'}
         onclick={() => (filter = 'favorites')}
       >
-        <Star size={15} fill={filter === 'favorites' ? '#000000' : 'none'} />
+        <Star
+          size={15}
+          fill={filter === 'favorites' ? '#000000' : 'none'}
+          color={filter === 'favorites' ? '#000000' : 'rgba(255,255,255,0.85)'}
+          strokeWidth={1.8}
+        />
         <span>Favorites</span>
       </button>
 
+      <!-- Vertical Divider between Favorites and Date -->
+      <span class="filter-divider"></span>
+
       <button
-        class="filter-pill date-pill"
+        class="filter-tab date-tab"
         onclick={() => (dateSortDesc = !dateSortDesc)}
         title="Sort by date"
       >
         <Calendar size={15} />
         <span>Date</span>
-        <ChevronDown size={14} style="transform: rotate({dateSortDesc ? 0 : 180}deg);" />
+        <ChevronDown size={14} style="transform: rotate({dateSortDesc ? 0 : 180}deg); transition: transform 0.2s ease;" />
       </button>
     </div>
   </div>
@@ -158,11 +232,13 @@
           <TrackRow
             {track}
             isPlaying={activeTrackId === track.id && isPlaying}
-            {currentPosSecs}
+            isCurrentTrack={activeTrackId === track.id}
+            currentPosSecs={activeTrackId === track.id ? currentPosSecs : 0}
             onPlayToggle={(e) => handlePlayToggle(track, e)}
             onFavoriteToggle={(e) => handleFavoriteToggle(track, e)}
             onDelete={(e) => handleDelete(track, e)}
             onOpenDetail={() => onNavigateTrackDetail(track.id)}
+            onSeek={(sec, isFinal) => handleSeek(track, sec, isFinal)}
           />
         {/each}
       </div>
@@ -185,15 +261,41 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 24px;
+    margin-bottom: 22px;
     width: 100%;
+  }
+
+  /* Squircle nav buttons matching panel-2.png */
+  .btn-nav {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: #141417;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #FFFFFF;
+    padding: 9px 18px;
+    border-radius: 14px;
+    font-size: 13.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .btn-nav:hover {
+    background: #1C1C20;
+    border-color: rgba(255, 255, 255, 0.15);
+    transform: translateY(-1px);
+  }
+
+  .btn-nav:active {
+    transform: translateY(0);
   }
 
   .header-action-row {
     display: flex;
     align-items: flex-end;
     justify-content: space-between;
-    margin-bottom: 24px;
+    margin-bottom: 22px;
     width: 100%;
     gap: 16px;
   }
@@ -214,47 +316,55 @@
 
   .page-subtitle {
     font-size: 14px;
-    color: var(--text-muted);
+    color: rgba(255, 255, 255, 0.45);
   }
 
   .filter-controls {
     display: flex;
     align-items: center;
-    gap: 8px;
-    background: #16161A;
+    gap: 4px;
+    background: #141417;
     border: 1px solid rgba(255, 255, 255, 0.08);
     padding: 4px 6px;
-    border-radius: 9999px;
+    border-radius: 14px;
   }
 
-  .filter-pill {
+  .filter-tab {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 7px;
     background: transparent;
     border: none;
-    color: var(--text-muted);
-    padding: 7px 14px;
-    border-radius: 9999px;
+    color: rgba(255, 255, 255, 0.85);
+    padding: 7px 16px;
+    border-radius: 10px;
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;
     transition: all 0.15s ease;
   }
 
-  .filter-pill:hover {
+  .filter-tab:hover:not(.active-tab) {
     color: #FFFFFF;
+    background: rgba(255, 255, 255, 0.05);
   }
 
-  .filter-pill.active-pill {
+  .filter-tab.active-tab {
     background: var(--accent-lime);
     color: #000000;
-    font-weight: 600;
-    box-shadow: 0 0 14px var(--accent-lime-glow);
+    font-weight: 700;
+    box-shadow: 0 0 12px var(--accent-lime-glow);
   }
 
-  .date-pill {
-    gap: 5px;
+  .filter-divider {
+    width: 1px;
+    height: 18px;
+    background: rgba(255, 255, 255, 0.12);
+    margin: 0 4px;
+  }
+
+  .date-tab {
+    gap: 6px;
   }
 
   .tracks-scroll-area {
@@ -276,7 +386,7 @@
     align-items: center;
     justify-content: center;
     height: 200px;
-    color: var(--text-muted);
+    color: rgba(255, 255, 255, 0.45);
     font-size: 15px;
   }
 

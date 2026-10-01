@@ -3,60 +3,26 @@
 
   export let isRecording = false;
   export let isCalibrating = false;
-  export let level = 0.0; // 0.0 to 1.0
   export let onToggle: () => void;
-
-  // Arc calculation for SVG meter ring
-  // Center: (68, 68), Radius: 54 -> Circumference ≈ 339.29
-  const CIRCUMFERENCE = 2 * Math.PI * 54;
-  
-  // Base arc coverage in idle (about 42% of circumference matching panel-1.png)
-  // When active/level rises, arc smoothly sweeps up to full circle (1.0)
-  $: activeFraction = isCalibrating
-    ? 0.55
-    : isRecording
-      ? Math.min(1.0, 0.5 + level * 0.5)
-      : Math.min(1.0, 0.42 + level * 0.58);
-
-  $: dashOffset = CIRCUMFERENCE * (1 - activeFraction);
-  $: glowIntensity = isRecording ? 0.6 + level * 0.4 : isCalibrating ? 0.5 : 0.25 + level * 0.4;
 </script>
 
 <div class="record-wrapper">
   <!-- Outer Dark Bezel Container -->
   <div class="outer-bezel">
-    <!-- Lime Green Level Arc SVG -->
-    <svg class="meter-svg" viewBox="0 0 136 136">
-      <defs>
-        <filter id="lime-glow" x="-30%" y="-30%" width="160%" height="160%">
-          <feGaussianBlur stdDeviation="3.5" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-      </defs>
-
-      <!-- Faint track circle -->
+    <!-- Lime Green Fixed Arc SVG -->
+    <svg class="meter-svg" viewBox="0 0 144 144">
+      <!-- Complete dark circular track groove (bottom portion shows when neon arc ends) -->
       <circle
-        cx="68"
-        cy="68"
-        r="54"
+        cx="72"
+        cy="72"
+        r="58"
         class="track-circle"
       />
 
-      <!-- Dynamic Lime-Green Glowing Arc -->
-      <circle
-        cx="68"
-        cy="68"
-        r="54"
-        class="arc-circle"
-        style="
-          stroke-dasharray: {CIRCUMFERENCE};
-          stroke-dashoffset: {dashOffset};
-          opacity: {0.7 + glowIntensity * 0.3};
-          filter: drop-shadow(0 0 {6 * glowIntensity}px rgba(198, 255, 61, {glowIntensity}));
-        "
+      <!-- Sharp, Clean Fixed Neon Lime Arc (spanning 214° symmetrically across 12 o'clock, no glow) -->
+      <path
+        d="M 16.53 88.96 A 58 58 0 1 1 127.47 88.96"
+        class="neon-arc"
       />
     </svg>
 
@@ -96,45 +62,43 @@
   }
 
   .outer-bezel {
-    width: 136px;
-    height: 136px;
+    width: 144px;
+    height: 144px;
     border-radius: 50%;
     background: #141417;
-    border: 1px solid rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.08);
     display: flex;
     align-items: center;
     justify-content: center;
     position: relative;
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.45);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
   }
 
   .meter-svg {
     position: absolute;
     top: 0;
     left: 0;
-    width: 136px;
-    height: 136px;
+    width: 144px;
+    height: 144px;
     pointer-events: none;
-    transform: rotate(-135deg); /* Orient arc at top-left across to top-right matching mockup */
   }
 
   .track-circle {
     fill: none;
-    stroke: rgba(255, 255, 255, 0.04);
-    stroke-width: 3.5;
+    stroke: #2E2E36;
+    stroke-width: 4.5;
   }
 
-  .arc-circle {
+  .neon-arc {
     fill: none;
     stroke: var(--accent-lime);
-    stroke-width: 3.5;
-    stroke-linecap: round;
-    transition: stroke-dashoffset 0.08s ease-out, filter 0.15s ease, opacity 0.15s ease;
+    stroke-width: 4.5;
+    stroke-linecap: butt;
   }
 
   .record-btn {
-    width: 90px;
-    height: 90px;
+    width: 94px;
+    height: 94px;
     border-radius: 50%;
     background-color: #ED2B2F;
     border: none;
@@ -142,7 +106,7 @@
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    box-shadow: 0 6px 20px rgba(237, 43, 47, 0.42);
+    box-shadow: 0 4px 18px rgba(237, 43, 47, 0.42);
     transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.15s ease, border-radius 0.22s ease;
     z-index: 2;
   }

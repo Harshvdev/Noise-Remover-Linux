@@ -42,16 +42,6 @@
         micLevel = 0.0;
       }
     }, 35);
-
-    // Load most recent track for bottom-left preview card
-    try {
-      const tracks = await api.getTracks();
-      if (tracks.length > 0) {
-        latestRecording = tracks[0];
-      }
-    } catch (e) {
-      console.error(e);
-    }
   });
 
   onDestroy(() => {
@@ -199,7 +189,6 @@
     <RecordButton
       {isRecording}
       {isCalibrating}
-      level={micLevel}
       onToggle={handleRecordClick}
     />
   </main>

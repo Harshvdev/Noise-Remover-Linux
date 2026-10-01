@@ -15,7 +15,13 @@ pub fn run() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 
-    let recordings_dir = PathBuf::from("recordings");
+    let recordings_dir = if PathBuf::from("../recordings").exists() {
+        std::fs::canonicalize(PathBuf::from("../recordings"))
+            .unwrap_or_else(|_| PathBuf::from("../recordings"))
+    } else {
+        std::fs::canonicalize(PathBuf::from("recordings"))
+            .unwrap_or_else(|_| PathBuf::from("recordings"))
+    };
 
     tauri::Builder::default()
         .setup(|app| {

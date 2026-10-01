@@ -275,6 +275,13 @@ pub fn toggle_favorite(state: State<'_, AppState>, id: String) -> Result<bool, S
 
 #[tauri::command]
 pub fn delete_track(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let mut cur = state.current_playing_track.lock().unwrap();
+    if *cur == Some(id.clone()) {
+        if let Ok(player) = state.player.lock() {
+            player.pause();
+        }
+        *cur = None;
+    }
     state.track_manager.delete_track(&id)
 }
 
@@ -332,7 +339,10 @@ pub fn play_track(
         }
         player.play();
     } else {
-        // Same track and same mode, just resume
+        // Same track and same mode
+        if let Some(sec) = from_sec {
+            player.seek(sec);
+        }
         player.play();
     }
 
@@ -439,6 +449,11 @@ pub fn process_track(
     meta.has_clean = true;
     meta.model_used = model.display_name().to_string();
     meta.clean_waveform = compute_waveform_peaks(&res.cleaned_samples, 120);
+    let dur_secs = res.cleaned_samples.len() as f32 / 48000.0;
+    meta.duration_secs = dur_secs;
+    let mins = (dur_secs / 60.0).floor() as u32;
+    let secs = (dur_secs % 60.0).floor() as u32;
+    meta.formatted_duration = format!("{:02}:{:02}", mins, secs);
 
     state.track_manager.save_track(&meta)?;
     Ok(meta)

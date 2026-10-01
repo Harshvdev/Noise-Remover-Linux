@@ -94,8 +94,14 @@
       if (peak > overallMax) overallMax = peak;
     }
 
+    const minVal = Math.min(...peaks);
+    const range = overallMax - minVal;
+    if (range < 0.04) {
+      return Array.from({ length: BAR_COUNT }, () => 3);
+    }
+
     return peaks.map((p) => {
-      const norm = Math.min(1.0, p / overallMax);
+      const norm = Math.pow((p - minVal) / range, 1.2);
       // Min 3px dot up to 21px peak height
       return Math.max(3, Math.round(3 + norm * 18));
     });
