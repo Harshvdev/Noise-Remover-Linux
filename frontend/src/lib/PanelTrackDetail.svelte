@@ -45,6 +45,7 @@
   let animFrameId: number;
   let lastFrameTime = performance.now();
   let pendingSeekExpires = 0;
+  let pendingEnhanceExpires = 0;
 
   function cleanDate(d: string | undefined): string {
     if (!d) return 'Mon, Oct 27, 2025 12:14';
@@ -87,7 +88,9 @@
         const status = await api.getPlaybackStatus();
         if (status.track_id === trackId) {
           isPlaying = status.is_playing;
-          isCleanAudio = status.is_clean;
+          if (pendingEnhanceExpires <= Date.now()) {
+            isCleanAudio = status.is_clean;
+          }
 
           if (pendingSeekExpires > Date.now()) {
             const diff = Math.abs(status.position_seconds - currentPosSecs);
@@ -138,7 +141,8 @@
   // Seamless real-time A/B audio toggle
   async function handleEnhanceToggle() {
     isCleanAudio = !isCleanAudio;
-    if (track) {
+    pendingEnhanceExpires = Date.now() + 1000;
+    if (track && isPlaying) {
       try {
         await api.playTrack(track.id, isCleanAudio, currentPosSecs);
       } catch (e) {
@@ -446,9 +450,11 @@
   .panel-detail {
     width: 100%;
     height: 100%;
+    flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
-    padding: clamp(10px, 1.8vh, 22px) clamp(10px, 2.2vw, 36px);
+    padding: clamp(14px, 2.2vh, 26px) clamp(16px, 2.8vw, 36px) clamp(20px, 3vh, 32px);
     background-color: var(--bg-app);
     overflow-y: auto;
     overflow-x: hidden;
@@ -462,6 +468,7 @@
     margin: 0 auto;
     display: flex;
     flex-direction: column;
+    flex: 1;
     height: 100%;
     min-height: 0;
   }
@@ -625,25 +632,30 @@
     display: flex;
     flex-direction: column;
     justify-content: space-between;
-    gap: 18px;
     flex: 1;
     min-height: 0;
+    width: 100%;
+    gap: 16px;
   }
 
   .scrubber-card {
     background: transparent;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
+    width: 100%;
     flex: 1;
     min-height: 0;
   }
 
   /* Bottom 5 Action Cards — Prominent studio row matching reference */
   .bottom-action-cards {
-    max-width: 960px;
+    max-width: 1000px;
     width: 100%;
-    margin: 0 auto 6px auto;
+    margin: 0 auto;
+    margin-top: auto;
+    margin-bottom: clamp(10px, 1.8vh, 18px);
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 12px;
@@ -663,9 +675,8 @@
     justify-content: space-between;
     gap: 10px;
     cursor: pointer;
-    transition: background 0.18s cubic-bezier(0.16, 1, 0.3, 1),
-                border-color 0.18s cubic-bezier(0.16, 1, 0.3, 1),
-                transform 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+    transition: background-color 0.2s ease,
+                border-color 0.2s ease;
     box-sizing: border-box;
     user-select: none;
     overflow: visible;
@@ -674,17 +685,19 @@
   .action-card:hover:not(.disabled) {
     background: #18181E;
     border-color: rgba(255, 255, 255, 0.16);
-    transform: translateY(-2px);
   }
 
   .action-card:active:not(.disabled) {
-    transform: translateY(0);
+    background: #15151A;
+  }
+
+  .enhance-card {
+    transition: background-color 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+                border-color 0.28s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .enhance-card.enhance-active {
-    border: 1.5px solid var(--accent-lime);
-    box-shadow: 0 0 18px rgba(198, 255, 61, 0.14);
-    background: #101014;
+    background: #141419;
   }
 
   .card-top-row {
@@ -715,51 +728,69 @@
 
   .enhance-bars-icon .ebar {
     width: 3px;
-    background-color: rgba(255, 255, 255, 0.4);
+    background-color: rgba(255, 255, 255, 0.35);
     border-radius: 9999px;
-    transition: background-color 0.2s ease;
+    transition: height 0.32s cubic-bezier(0.34, 1.4, 0.64, 1),
+                background-color 0.28s ease,
+                box-shadow 0.28s ease;
   }
 
+  /* Rested baseline when Enhance is OFF */
+  .enhance-bars-icon .eb1 { height: 6px; }
+  .enhance-bars-icon .eb2 { height: 10px; }
+  .enhance-bars-icon .eb3 { height: 14px; }
+  .enhance-bars-icon .eb4 { height: 9px; }
+  .enhance-bars-icon .eb5 { height: 5px; }
+
+  /* Active lively heights when Enhance is ON */
   .enhance-bars-icon.active .ebar {
     background-color: var(--accent-lime);
+    box-shadow: 0 0 6px var(--accent-lime-glow);
   }
 
-  .enhance-bars-icon .eb1 { height: 9px; }
-  .enhance-bars-icon .eb2 { height: 17px; }
-  .enhance-bars-icon .eb3 { height: 24px; }
-  .enhance-bars-icon .eb4 { height: 16px; }
-  .enhance-bars-icon .eb5 { height: 8px; }
+  .enhance-bars-icon.active .eb1 { height: 10px; }
+  .enhance-bars-icon.active .eb2 { height: 18px; }
+  .enhance-bars-icon.active .eb3 { height: 24px; }
+  .enhance-bars-icon.active .eb4 { height: 17px; }
+  .enhance-bars-icon.active .eb5 { height: 9px; }
 
   /* Compact scalable toggle switch */
   .toggle-switch {
     width: 40px;
     height: 23px;
     border-radius: 9999px;
-    background: rgba(255, 255, 255, 0.18);
+    background-color: rgba(255, 255, 255, 0.16);
     position: relative;
     cursor: pointer;
-    transition: background 0.2s ease;
+    transition: background-color 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+                box-shadow 0.28s ease;
     flex-shrink: 0;
+    pointer-events: none;
   }
 
   .toggle-knob {
     width: 17px;
     height: 17px;
     border-radius: 50%;
-    background: #FFFFFF;
+    background-color: #FFFFFF;
     position: absolute;
     top: 3px;
     left: 3px;
-    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), background 0.2s ease;
+    transform: translateX(0);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+    transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+                box-shadow 0.2s ease;
+    pointer-events: none;
   }
 
   .toggle-switch.active {
-    background: var(--accent-lime);
+    background-color: var(--accent-lime);
+    box-shadow: 0 0 10px rgba(198, 255, 61, 0.3);
   }
 
   .toggle-switch.active .toggle-knob {
     transform: translateX(17px);
-    background: #FFFFFF;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
   }
 
   .card-bottom-info {
@@ -791,6 +822,11 @@
     overflow: hidden;
     text-overflow: ellipsis;
     line-height: 1.2;
+    transition: color 0.25s ease;
+  }
+
+  .enhance-card.enhance-active .card-subheadline {
+    color: rgba(255, 255, 255, 0.75);
   }
 
   .sub-short {
@@ -935,13 +971,16 @@
 
   @media (max-height: 720px) {
     .panel-detail {
-      padding: 10px 18px;
+      padding: 10px 18px 14px;
     }
     .track-header-title {
       margin-bottom: 4px;
     }
     .player-stage {
       gap: 12px;
+    }
+    .bottom-action-cards {
+      margin-bottom: 8px;
     }
     .action-card {
       min-height: 98px;

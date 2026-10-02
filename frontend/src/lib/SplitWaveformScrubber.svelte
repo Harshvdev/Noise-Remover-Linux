@@ -15,12 +15,17 @@
   let animId: number;
   let container: HTMLDivElement;
   let scrubberTrackEl: HTMLDivElement;
+  let resizeObserver: ResizeObserver | null = null;
 
   // Floating play/pause button auto-hide state
   let showControls = true;
   let hideTimeout: ReturnType<typeof setTimeout> | null = null;
   let isDraggingScrubber = false;
   let isDraggingWaveform = false;
+
+  // Smooth enhance A/B cross-fade transition state
+  let enhanceProgress = isCleanAudio ? 1.0 : 0.0;
+  let lastRenderTime = performance.now();
 
   // Static grain particles for Raw mode
   interface RawGrain {
@@ -91,7 +96,9 @@
     if (!ctx) return;
 
     const resize = () => {
+      if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
       const dpr = window.devicePixelRatio || 1;
       canvas.width = rect.width * dpr;
       canvas.height = rect.height * dpr;
@@ -102,61 +109,84 @@
     resize();
     window.addEventListener('resize', resize);
 
+    if (typeof ResizeObserver !== 'undefined' && container) {
+      resizeObserver = new ResizeObserver(() => {
+        resize();
+      });
+      resizeObserver.observe(container);
+    }
+
     const render = () => {
       const rect = canvas.getBoundingClientRect();
       const width = rect.width;
       const height = rect.height;
+      if (width <= 0 || height <= 0) {
+        animId = requestAnimationFrame(render);
+        return;
+      }
       const centerY = height / 2;
+
+      // Smooth delta-time transition for enhance toggle (fade in/out over ~300ms)
+      const now = performance.now();
+      const dt = Math.min(0.08, (now - lastRenderTime) / 1000);
+      lastRenderTime = now;
+
+      const target = isCleanAudio ? 1.0 : 0.0;
+      enhanceProgress += (target - enhanceProgress) * Math.min(1.0, dt * 10.0);
+      if (Math.abs(target - enhanceProgress) < 0.002) {
+        enhanceProgress = target;
+      }
+      const t = enhanceProgress;
 
       ctx.clearRect(0, 0, width, height);
 
-      const barCount = Math.max(60, Math.min(120, Math.round(width / 7.2)));
-      const barSpacing = width / barCount;
-      const barWidth = Math.max(2.2, barSpacing * 0.56);
-
-      if (isCleanAudio) {
-        // Enhanced Mode: 100% Glowing Neon Lime Bars, No Noise Particles
-        const activeWave = cleanWaveform.length > 0 ? cleanWaveform : rawWaveform;
-        ctx.shadowColor = '#C6FF3D';
-        ctx.shadowBlur = 10;
-        ctx.fillStyle = '#C6FF3D';
-
-        for (let i = 0; i < barCount; i++) {
-          const x = i * barSpacing + barSpacing / 2;
-          const normIdx = Math.floor((i / barCount) * activeWave.length);
-          const peak = activeWave[normIdx] || 0.28;
-          const h = Math.max(6, peak * (height * 0.78));
-
-          ctx.beginPath();
-          ctx.roundRect(x - barWidth / 2, centerY - h / 2, barWidth, h, 9999);
-          ctx.fill();
-        }
-      } else {
-        // Disabled Enhancement Mode: Organic Grain Noise Particles & Textured Silver Bars
+      // 1. Noise hiss particles (fade in when raw, fade out when clean)
+      if (t < 0.99) {
+        const mistAlpha = 1.0 - t;
         ctx.shadowBlur = 0;
-
-        // Draw particle hiss/noise mist
         for (const g of rawGrains) {
-          ctx.fillStyle = `rgba(220, 220, 235, ${g.alpha})`;
+          ctx.fillStyle = `rgba(220, 220, 235, ${(g.alpha * mistAlpha).toFixed(3)})`;
           ctx.beginPath();
           ctx.arc(g.x, centerY + g.y, g.size, 0, Math.PI * 2);
           ctx.fill();
         }
+      }
 
-        // Draw raw waveform bars
-        const activeWave = rawWaveform.length > 0 ? rawWaveform : cleanWaveform;
-        ctx.fillStyle = 'rgba(215, 215, 230, 0.75)';
+      // 2. Waveform bars with smooth cross-fade between Clean (neon lime) and Raw (silver)
+      const barCount = Math.max(64, Math.min(180, Math.round(width / 7.5)));
+      const barSpacing = width / barCount;
+      const barWidth = Math.max(2.4, barSpacing * 0.56);
 
-        for (let i = 0; i < barCount; i++) {
-          const x = i * barSpacing + barSpacing / 2;
-          const normIdx = Math.floor((i / barCount) * activeWave.length);
-          const peak = activeWave[normIdx] || 0.28;
-          const h = Math.max(6, peak * (height * 0.78));
+      const activeClean = cleanWaveform.length > 0 ? cleanWaveform : rawWaveform;
+      const activeRaw = rawWaveform.length > 0 ? rawWaveform : cleanWaveform;
 
-          ctx.beginPath();
-          ctx.roundRect(x - barWidth / 2, centerY - h / 2, barWidth, h, 9999);
-          ctx.fill();
-        }
+      // Glow halo: blooms when clean (t=1), dims when raw (t=0)
+      if (t > 0.02) {
+        ctx.shadowColor = '#C6FF3D';
+        ctx.shadowBlur = Math.round(10 * t);
+      } else {
+        ctx.shadowBlur = 0;
+      }
+
+      // Interpolate bar color smoothly between Neon Lime #C6FF3D (198, 255, 61, 1.0) and Raw Silver (215, 215, 230, 0.75)
+      const r = Math.round(198 * t + 215 * (1 - t));
+      const g = Math.round(255 * t + 215 * (1 - t));
+      const b = Math.round(61 * t + 230 * (1 - t));
+      const a = (1.0 * t + 0.75 * (1 - t)).toFixed(3);
+      ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${a})`;
+
+      for (let i = 0; i < barCount; i++) {
+        const x = i * barSpacing + barSpacing / 2;
+        const normIdxClean = Math.floor((i / barCount) * activeClean.length);
+        const normIdxRaw = Math.floor((i / barCount) * activeRaw.length);
+        const peakClean = activeClean[normIdxClean] || 0.28;
+        const peakRaw = activeRaw[normIdxRaw] || peakClean;
+        const peak = peakClean * t + peakRaw * (1 - t);
+        const h = Math.max(6, peak * (height * 0.78));
+
+        ctx.beginPath();
+        ctx.roundRect(x - barWidth / 2, centerY - h / 2, barWidth, h, 9999);
+        ctx.fill();
       }
 
       animId = requestAnimationFrame(render);
@@ -167,12 +197,16 @@
     return () => {
       cancelAnimationFrame(animId);
       window.removeEventListener('resize', resize);
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
     };
   });
 
   onDestroy(() => {
     if (animId) cancelAnimationFrame(animId);
     if (hideTimeout) clearTimeout(hideTimeout);
+    if (resizeObserver) resizeObserver.disconnect();
   });
 
   // Direct waveform seek & drag
@@ -335,20 +369,23 @@
 <style>
   .split-scrubber-widget {
     width: 100%;
+    max-width: 1000px;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 20px;
     align-items: center;
+    box-sizing: border-box;
   }
 
   .waveform-stage {
     width: 100%;
-    height: clamp(170px, 28vh, 250px);
+    height: clamp(190px, 30vh, 290px);
     position: relative;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
+    box-sizing: border-box;
   }
 
   canvas {
@@ -375,6 +412,7 @@
     background-color: #FFFFFF;
     box-shadow: 0 0 8px rgba(255, 255, 255, 0.5);
     border-radius: 9999px;
+    transition: background-color 0.3s ease, box-shadow 0.3s ease;
   }
 
   .playhead-pin.clean-pin .pin-line {
@@ -427,7 +465,8 @@
     width: 100%;
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 16px;
+    box-sizing: border-box;
   }
 
   .time-label {
@@ -462,6 +501,7 @@
     background-color: #FFFFFF;
     border-radius: 9999px;
     box-shadow: 0 0 6px rgba(255, 255, 255, 0.3);
+    transition: background-color 0.3s ease, box-shadow 0.3s ease;
   }
 
   .scrubber-fill.clean-fill {
@@ -478,7 +518,7 @@
     background-color: #FFFFFF;
     transform: translate(-50%, -50%);
     box-shadow: 0 0 8px rgba(255, 255, 255, 0.6);
-    transition: transform 0.1s ease;
+    transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.3s ease, box-shadow 0.3s ease;
   }
 
   .scrubber-thumb.clean-thumb {
