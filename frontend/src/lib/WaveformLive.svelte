@@ -282,11 +282,10 @@
       const dotRadius = barWidth / 2;
       const maxBarHeight = height * 0.78;
 
-      // Electric neon lime from panel-1.png (#C6FF3D)
+      // Electric neon lime from panel-1.png (#C6FF3D) without glow
       const LIME_COLOR = '#C6FF3D';
       ctx.fillStyle = LIME_COLOR;
-      ctx.shadowColor = `rgba(198, 255, 61, ${(0.32 + maxActiveLevel * 0.45).toFixed(2)})`;
-      ctx.shadowBlur = 5 + maxActiveLevel * 9;
+      ctx.shadowBlur = 0;
 
       for (let m = 0; m < NUM_BARS; m++) {
         const x = (m + 1) * barSpacing;

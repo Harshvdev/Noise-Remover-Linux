@@ -272,7 +272,6 @@
   /* Active Track with Lime Border matching panel-2.png */
   .track-row.is-active-playing {
     border: 1.5px solid var(--accent-lime);
-    box-shadow: 0 0 18px rgba(198, 255, 61, 0.16);
   }
 
   .track-play-btn {
@@ -296,7 +295,6 @@
 
   .track-play-btn.btn-active {
     background: var(--accent-lime);
-    box-shadow: 0 0 14px var(--accent-lime-glow);
   }
 
   .track-info {
@@ -356,7 +354,6 @@
 
   .wave-bar.is-past {
     background-color: var(--accent-lime);
-    box-shadow: 0 0 6px rgba(198, 255, 61, 0.45);
   }
 
   .wave-bar:not(.is-past):not(.is-idle) {
@@ -372,7 +369,6 @@
     pointer-events: none;
     z-index: 10;
     transform: translateX(-50%);
-    box-shadow: 0 0 5px rgba(255, 255, 255, 0.6);
   }
 
   .playhead-dot {
@@ -384,7 +380,6 @@
     top: -2.5px;
     left: 50%;
     transform: translateX(-50%);
-    box-shadow: 0 0 8px rgba(255, 255, 255, 0.9);
     transition: transform 0.12s ease;
   }
 

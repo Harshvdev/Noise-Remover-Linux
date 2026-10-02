@@ -106,15 +106,15 @@
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    box-shadow: 0 4px 18px rgba(237, 43, 47, 0.42);
-    transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.15s ease, border-radius 0.22s ease;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+    transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.15s ease;
     z-index: 2;
   }
 
   .record-btn:hover {
     transform: scale(1.04);
     background-color: #F8363A;
-    box-shadow: 0 8px 26px rgba(237, 43, 47, 0.6);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
   }
 
   .record-btn:active {
@@ -122,16 +122,16 @@
   }
 
   .record-btn.is-recording {
-    border-radius: 24px;
+    border-radius: 50%;
     animation: recording-pulse 1.8s infinite ease-in-out;
   }
 
   @keyframes recording-pulse {
     0%, 100% {
-      box-shadow: 0 0 16px rgba(237, 43, 47, 0.45);
+      transform: scale(1);
     }
     50% {
-      box-shadow: 0 0 30px rgba(237, 43, 47, 0.85);
+      transform: scale(1.04);
     }
   }
 

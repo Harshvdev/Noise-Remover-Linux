@@ -787,8 +787,7 @@
     background-color: rgba(255, 255, 255, 0.35);
     border-radius: 9999px;
     transition: height 0.32s cubic-bezier(0.34, 1.4, 0.64, 1),
-                background-color 0.28s ease,
-                box-shadow 0.28s ease;
+                background-color 0.28s ease;
   }
 
   /* Rested baseline when Enhance is OFF */
@@ -801,7 +800,6 @@
   /* Active lively heights when Enhance is ON */
   .enhance-bars-icon.active .ebar {
     background-color: var(--accent-lime);
-    box-shadow: 0 0 6px var(--accent-lime-glow);
   }
 
   .enhance-bars-icon.active .eb1 { height: 10px; }
@@ -821,8 +819,7 @@
     padding: 0 3px;
     box-sizing: border-box;
     cursor: pointer;
-    transition: background-color 0.28s cubic-bezier(0.16, 1, 0.3, 1),
-                box-shadow 0.28s ease;
+    transition: background-color 0.28s cubic-bezier(0.16, 1, 0.3, 1);
     flex-shrink: 0;
     pointer-events: none;
   }
@@ -835,14 +832,12 @@
     flex-shrink: 0;
     transform: translateX(0);
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
-    transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1),
-                box-shadow 0.2s ease;
+    transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
     pointer-events: none;
   }
 
   .toggle-switch.active {
     background-color: var(--accent-lime);
-    box-shadow: 0 0 10px rgba(198, 255, 61, 0.3);
   }
 
   .toggle-switch.active .toggle-knob {

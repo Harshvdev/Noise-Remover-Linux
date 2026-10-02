@@ -211,7 +211,6 @@
 
   .spectrum-bar:hover {
     opacity: 1;
-    box-shadow: 0 0 10px var(--accent-lime-glow);
   }
 
   .spectrum-labels {

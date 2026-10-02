@@ -102,7 +102,6 @@ html, body {
 
 .btn-pill-lime:hover {
   background: #D4FF5E;
-  box-shadow: 0 0 16px var(--accent-lime-glow);
 }
 
 /* Toggle Switch */
@@ -159,7 +158,6 @@ input[type="range"].lime-slider::-webkit-slider-thumb {
   border-radius: 50%;
   background: var(--accent-lime);
   cursor: pointer;
-  box-shadow: 0 0 8px rgba(198, 255, 61, 0.7);
   transition: transform 0.15s ease;
 }
 

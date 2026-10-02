@@ -353,7 +353,6 @@
     background: var(--accent-lime);
     color: #000000;
     font-weight: 700;
-    box-shadow: 0 0 12px var(--accent-lime-glow);
   }
 
   .filter-divider {

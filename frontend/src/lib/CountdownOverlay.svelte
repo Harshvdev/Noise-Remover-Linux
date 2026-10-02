@@ -32,7 +32,7 @@
 <div class="countdown-backdrop">
   <div class="countdown-modal">
     <div class="countdown-ring">
-      <span class="count-number">{label}</span>
+      <span class="count-number" class:is-text={label === 'Start!'}>{label}</span>
     </div>
 
     <div class="countdown-text">
@@ -75,7 +75,6 @@
     height: 110px;
     border-radius: 50%;
     border: 3px solid var(--accent-lime);
-    box-shadow: 0 0 30px var(--accent-lime-glow);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -88,7 +87,14 @@
     font-size: 42px;
     font-weight: 700;
     color: var(--accent-lime);
-    text-shadow: 0 0 20px var(--accent-lime-glow);
+    line-height: 1;
+    user-select: none;
+    transition: font-size 0.15s ease;
+  }
+
+  .count-number.is-text {
+    font-size: 24px;
+    letter-spacing: -0.2px;
   }
 
   .countdown-text h3 {

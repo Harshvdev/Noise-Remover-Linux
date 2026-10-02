@@ -165,13 +165,8 @@
       const activeClean = cleanWaveform.length > 0 ? cleanWaveform : rawWaveform;
       const activeRaw = rawWaveform.length > 0 ? rawWaveform : cleanWaveform;
 
-      // Glow halo: blooms when clean (t=1), dims when raw (t=0)
-      if (t > 0.02) {
-        ctx.shadowColor = '#C6FF3D';
-        ctx.shadowBlur = Math.round(10 * t);
-      } else {
-        ctx.shadowBlur = 0;
-      }
+      // No glow halo on waveform bars
+      ctx.shadowBlur = 0;
 
       // Interpolate bar color smoothly between Neon Lime #C6FF3D (198, 255, 61, 1.0) and Raw Silver (215, 215, 230, 0.75)
       const r = Math.round(198 * t + 215 * (1 - t));
@@ -585,12 +580,12 @@
     cursor: grabbing;
   }
 
-  /* Distinct high-contrast needle with crisp outline so it is clearly visible over lime bars */
+  /* Distinct high-contrast needle with crisp outline without glow */
   .playhead-pin .pin-line {
     width: 100%;
     height: 100%;
     background-color: #FFFFFF;
-    box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.85), 0 0 8px rgba(255, 255, 255, 0.95);
+    box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.85);
     border-radius: 9999px;
   }
 
@@ -688,13 +683,11 @@
     height: 100%;
     background-color: #FFFFFF;
     border-radius: 9999px;
-    box-shadow: 0 0 6px rgba(255, 255, 255, 0.3);
-    transition: background-color 0.3s ease, box-shadow 0.3s ease;
+    transition: background-color 0.3s ease;
   }
 
   .scrubber-fill.clean-fill {
     background-color: var(--accent-lime);
-    box-shadow: 0 0 6px var(--accent-lime-glow);
   }
 
   .scrubber-thumb {
@@ -705,13 +698,11 @@
     border-radius: 50%;
     background-color: #FFFFFF;
     transform: translate(-50%, -50%);
-    box-shadow: 0 0 8px rgba(255, 255, 255, 0.6);
-    transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.3s ease, box-shadow 0.3s ease;
+    transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.3s ease;
   }
 
   .scrubber-thumb.clean-thumb {
     background-color: var(--accent-lime);
-    box-shadow: 0 0 8px rgba(198, 255, 61, 0.7);
   }
 
   .scrubber-track:hover .scrubber-thumb,
