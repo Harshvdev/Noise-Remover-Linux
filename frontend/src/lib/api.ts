@@ -189,6 +189,15 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
       mockTracks = mockTracks.filter((t) => t.id !== id);
       return undefined as T;
     }
+    case 'rename_track': {
+      const id = args?.id as string;
+      const newTitle = args?.newTitle as string;
+      const t = mockTracks.find((tr) => tr.id === id);
+      if (t && newTitle) {
+        t.title = newTitle;
+      }
+      return undefined as T;
+    }
     case 'play_track': {
       mockPlayback.is_playing = true;
       if (args?.id) mockPlayback.track_id = args.id as string;

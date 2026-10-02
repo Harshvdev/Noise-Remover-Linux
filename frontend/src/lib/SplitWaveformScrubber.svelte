@@ -359,7 +359,7 @@
   }
 
   function handleWaveformPointerDown(e: PointerEvent) {
-    if (e.button !== 0) return;
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
     if ((e.target as HTMLElement).closest('.center-play-btn')) return;
     e.preventDefault();
 
@@ -372,7 +372,7 @@
   }
 
   function handlePinPointerDown(e: PointerEvent) {
-    if (e.button !== 0) return;
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
     e.stopPropagation();
     e.preventDefault();
 
@@ -385,7 +385,7 @@
   }
 
   function handleTimelinePointerDown(e: PointerEvent) {
-    if (e.button !== 0) return;
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
     e.stopPropagation();
     e.preventDefault();
 
@@ -509,7 +509,7 @@
     max-width: 1000px;
     display: flex;
     flex-direction: column;
-    gap: clamp(60px, 9vh, 96px);
+    gap: clamp(20px, 4.5vh, 64px);
     align-items: center;
     box-sizing: border-box;
   }
@@ -716,32 +716,54 @@
 
   @media (max-height: 720px) {
     .split-scrubber-widget {
-      gap: clamp(48px, 7.5vh, 68px);
+      gap: clamp(20px, 4vh, 40px);
     }
     .waveform-stage {
-      height: clamp(130px, 20vh, 160px);
+      height: clamp(110px, 18vh, 150px);
     }
   }
 
   @media (max-height: 560px) {
     .split-scrubber-widget {
-      gap: 36px;
+      gap: clamp(10px, 2.5vh, 22px);
     }
     .waveform-stage {
-      height: 110px;
+      height: clamp(75px, 17vh, 105px);
     }
   }
 
-  @media (max-width: 480px) {
+  @media (max-width: 640px) {
     .waveform-container {
-      padding: 0 52px;
+      padding: 0 46px;
     }
     .timeline-row {
       gap: 10px;
     }
     .time-label {
-      width: 42px;
-      font-size: 12px;
+      width: 40px;
+      font-size: 11.5px;
+    }
+  }
+
+  @media (max-width: 440px) {
+    .waveform-container {
+      padding: 0 36px;
+    }
+    .timeline-row {
+      gap: 8px;
+    }
+    .time-label {
+      width: 36px;
+      font-size: 11px;
+    }
+  }
+
+  @media (orientation: portrait) and (min-height: 600px) {
+    .waveform-stage {
+      height: clamp(120px, 18vh, 160px);
+    }
+    .split-scrubber-widget {
+      gap: clamp(12px, 2.5vh, 22px);
     }
   }
 </style>

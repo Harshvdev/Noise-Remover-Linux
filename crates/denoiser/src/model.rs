@@ -9,10 +9,19 @@ pub const DPDFNET2_48K_DOWNLOAD_URL: &str =
 
 /// Search known candidate directories for the DPDFNet2 ONNX model file.
 pub fn find_dpdfnet2_model() -> Option<PathBuf> {
+    if let Ok(env_path) = std::env::var("VOICE_CLEANER_MODEL_PATH") {
+        let p = PathBuf::from(env_path);
+        if p.exists() && p.metadata().map(|m| m.len() > 1_000_000).unwrap_or(false) {
+            return Some(p);
+        }
+    }
+
     let candidates = [
         PathBuf::from("models").join(DPDFNET2_48K_FILENAME),
         PathBuf::from("../models").join(DPDFNET2_48K_FILENAME),
         PathBuf::from("../../models").join(DPDFNET2_48K_FILENAME),
+        PathBuf::from("/data/data/com.voicecleaner.app/files/models").join(DPDFNET2_48K_FILENAME),
+        PathBuf::from("/data/user/0/com.voicecleaner.app/files/models").join(DPDFNET2_48K_FILENAME),
     ];
 
     for candidate in &candidates {

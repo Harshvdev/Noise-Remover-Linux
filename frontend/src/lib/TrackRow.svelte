@@ -106,16 +106,25 @@
     onOpenDetail();
   }
 
-  function handleWaveformMouseDown(e: MouseEvent) {
-    if (e.button !== 0) return;
-    e.stopPropagation(); // Do not trigger onOpenDetail row click
+  function handleWaveformPointerDown(e: PointerEvent) {
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    if (!isCurrentTrack) {
+      // Let touch/click bubble to handleRowClick -> onOpenDetail
+      return;
+    }
+    e.stopPropagation();
     isDragging = true;
     justScrubbed = true;
+    const target = e.currentTarget as HTMLElement;
+    try {
+      target.setPointerCapture(e.pointerId);
+    } catch (_) {}
+
     const sec = getSecFromClientX(e.clientX);
     dragSecs = sec;
     onSeek?.(sec, false);
 
-    const onMouseMove = (moveEv: MouseEvent) => {
+    const onPointerMove = (moveEv: PointerEvent) => {
       if (!isDragging) return;
       moveEv.preventDefault();
       const s = getSecFromClientX(moveEv.clientX);
@@ -123,12 +132,18 @@
       onSeek?.(s, false);
     };
 
-    const onMouseUp = (upEv: MouseEvent) => {
+    const onPointerUp = (upEv: PointerEvent) => {
       if (!isDragging) return;
       upEv.stopPropagation();
       isDragging = false;
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
+      try {
+        if (target.hasPointerCapture(upEv.pointerId)) {
+          target.releasePointerCapture(upEv.pointerId);
+        }
+      } catch (_) {}
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerUp);
       const s = getSecFromClientX(upEv.clientX);
       dragSecs = s;
       onSeek?.(s, true);
@@ -137,8 +152,9 @@
       }, 150);
     };
 
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerUp);
   }
 </script>
 
@@ -174,8 +190,7 @@
     class="track-waveform-wrapper"
     class:is-scrubbing={isDragging}
     bind:this={waveformWrapperEl}
-    onmousedown={handleWaveformMouseDown}
-    onclick={(e) => e.stopPropagation()}
+    onpointerdown={handleWaveformPointerDown}
     role="slider"
     tabindex="0"
     aria-label="Seek track position"
@@ -320,6 +335,8 @@
 
   .track-waveform-wrapper {
     flex: 1;
+    min-width: 0;
+    overflow: hidden;
     height: 36px;
     position: relative;
     display: flex;
@@ -327,6 +344,7 @@
     cursor: col-resize;
     user-select: none;
     padding: 0 2px;
+    touch-action: none;
   }
 
   .track-waveform-wrapper.is-scrubbing {
@@ -425,5 +443,57 @@
 
   .delete-box:hover :global(svg) {
     color: #FF453A !important;
+  }
+
+  @media (max-width: 640px) {
+    .track-row {
+      padding: 0 12px;
+      gap: 10px;
+    }
+    .track-play-btn {
+      width: 34px;
+      height: 34px;
+    }
+    .track-info {
+      width: auto;
+      max-width: 95px;
+      min-width: 60px;
+      flex-shrink: 0;
+    }
+    .track-title {
+      font-size: 13px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .track-date {
+      font-size: 10.5px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .track-waveform-wrapper {
+      min-width: 0;
+      flex: 1;
+    }
+    .track-duration {
+      display: none;
+    }
+    .track-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .action-box-btn {
+      width: 32px;
+      height: 32px;
+    }
+  }
+
+  @media (max-width: 440px) {
+    .track-info {
+      max-width: 75px;
+    }
   }
 </style>

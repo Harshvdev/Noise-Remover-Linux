@@ -342,7 +342,7 @@
 <style>
   .waveform-container {
     width: 100%;
-    height: 140px;
+    height: clamp(80px, 18vh, 140px);
     position: relative;
     display: flex;
     align-items: center;
@@ -363,6 +363,12 @@
       black calc(100% - 36px),
       transparent 100%
     );
+  }
+
+  @media (max-height: 540px) {
+    .waveform-container {
+      height: clamp(60px, 14vh, 90px);
+    }
   }
 
   canvas {

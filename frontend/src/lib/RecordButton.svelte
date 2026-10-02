@@ -46,9 +46,9 @@
     {#if isCalibrating}
       Listening to room noise...
     {:else if isRecording}
-      Click to stop recording
+      {typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0) ? 'Tap to stop recording' : 'Click to stop recording'}
     {:else}
-      Click to start recording
+      {typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0) ? 'Tap to start recording' : 'Click to start recording'}
     {/if}
   </p>
 </div>
@@ -140,5 +140,26 @@
     color: var(--text-muted);
     font-weight: 400;
     letter-spacing: -0.2px;
+  }
+
+  @media (max-height: 560px) {
+    .record-wrapper {
+      gap: 8px;
+    }
+    .outer-bezel {
+      width: 104px;
+      height: 104px;
+    }
+    .meter-svg {
+      width: 104px;
+      height: 104px;
+    }
+    .record-btn {
+      width: 68px;
+      height: 68px;
+    }
+    .caption {
+      font-size: 12px;
+    }
   }
 </style>

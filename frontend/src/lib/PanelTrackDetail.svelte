@@ -227,15 +227,24 @@
   }
 
   async function handleSaveRename() {
-    if (!track || !renameValue.trim()) return;
+    if (!track || !renameValue.trim()) {
+      isRenaming = false;
+      return;
+    }
     try {
       await api.renameTrack(track.id, renameValue.trim());
       track.title = renameValue.trim();
+    } catch (e) {
+      console.error('Rename track error:', e);
+    } finally {
       isRenaming = false;
       showMoreMenu = false;
-    } catch (e) {
-      console.error(e);
     }
+  }
+
+  function handleCancelRename() {
+    if (track) renameValue = track.title;
+    isRenaming = false;
   }
 
   async function handleOpenFolder() {
@@ -260,8 +269,13 @@
   }
 
   function handleWindowKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape' && showMoreMenu) {
-      showMoreMenu = false;
+    if (e.key === 'Escape') {
+      if (isRenaming) {
+        handleCancelRename();
+      }
+      if (showMoreMenu) {
+        showMoreMenu = false;
+      }
     }
   }
 </script>
@@ -286,9 +300,13 @@
             type="text"
             class="rename-input"
             bind:value={renameValue}
-            onkeydown={(e) => e.key === 'Enter' && handleSaveRename()}
+            onkeydown={(e) => {
+              if (e.key === 'Enter') handleSaveRename();
+              if (e.key === 'Escape') handleCancelRename();
+            }}
           />
           <button class="btn-save" onclick={handleSaveRename}>Save</button>
+          <button class="btn-cancel" onclick={handleCancelRename}>Cancel</button>
         </div>
       {:else}
         <h1 class="track-name">{track?.title || 'Track 01'}</h1>
@@ -510,10 +528,11 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    padding: clamp(14px, 2.2vh, 26px) clamp(16px, 2.8vw, 36px) clamp(20px, 3vh, 32px);
+    padding: max(clamp(10px, 2vh, 22px), calc(var(--safe-top, 0px) + 8px)) clamp(14px, 3vw, 32px) max(clamp(10px, 2vh, 20px), calc(var(--safe-bottom, 0px) + 14px));
     background-color: var(--bg-app);
-    overflow-y: auto;
-    overflow-x: hidden;
+    overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: manipulation;
     box-sizing: border-box;
   }
 
@@ -575,7 +594,7 @@
     border-color: var(--border-strong);
     background: var(--bg-card-active);
     transform: none !important;
-    z-index: 50;
+    z-index: 80;
   }
 
   .more-menu {
@@ -583,11 +602,12 @@
     bottom: calc(100% + 10px);
     right: 0;
     width: 210px;
+    max-width: calc(100vw - 32px);
     background: var(--bg-modal);
     border: 1px solid var(--border-subtle);
     border-radius: 14px;
     box-shadow: var(--shadow-floating);
-    z-index: 60;
+    z-index: 90;
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -662,28 +682,61 @@
   .rename-box {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
+    width: 100%;
+    box-sizing: border-box;
   }
 
   .rename-input {
+    flex: 1;
+    min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
     background: var(--bg-surface-sunken);
-    border: 1px solid var(--accent-lime);
+    border: 1.5px solid var(--accent-lime);
     color: var(--text-main);
-    padding: 6px 12px;
-    border-radius: 8px;
-    font-size: 20px;
+    padding: 7px 12px;
+    border-radius: 10px;
+    font-size: clamp(16px, 4vw, 22px);
     font-weight: 600;
     outline: none;
+    box-shadow: 0 0 0 2px var(--accent-lime-dim);
   }
 
   .btn-save {
     background: var(--accent-lime);
     color: var(--text-on-accent);
     border: none;
-    padding: 7px 16px;
-    border-radius: 8px;
+    padding: 8px 16px;
+    border-radius: 10px;
     font-weight: 600;
+    font-size: 13.5px;
     cursor: pointer;
+    flex-shrink: 0;
+    transition: transform 0.12s ease, opacity 0.15s ease;
+  }
+
+  .btn-save:hover {
+    opacity: 0.92;
+    transform: translateY(-1px);
+  }
+
+  .btn-cancel {
+    background: var(--bg-card);
+    border: 1px solid var(--border-medium);
+    color: var(--text-secondary);
+    padding: 8px 14px;
+    border-radius: 10px;
+    font-weight: 500;
+    font-size: 13.5px;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s ease;
+  }
+
+  .btn-cancel:hover {
+    background: var(--bg-card-hover);
+    color: var(--text-main);
   }
 
   .player-stage {
@@ -977,7 +1030,8 @@
       display: none;
     }
     .soon-badge {
-      display: none;
+      font-size: 8.5px;
+      padding: 1px 4px;
     }
     .action-card :global(svg) {
       width: 17px !important;
@@ -1025,22 +1079,205 @@
     opacity: 0.7;
   }
 
-  @media (max-height: 720px) {
+  @media (max-width: 680px), (orientation: portrait) {
     .panel-detail {
-      padding: 10px 18px 14px;
+      padding-top: max(32px, calc(var(--safe-top, 0px) + 14px));
+      padding-bottom: max(32px, calc(var(--safe-bottom, 0px) + 18px));
+      padding-left: max(16px, calc(var(--safe-left, 0px) + 16px));
+      padding-right: max(16px, calc(var(--safe-right, 0px) + 16px));
+    }
+    .detail-topbar {
+      margin-top: 2px;
+      margin-bottom: 6px;
+    }
+    .track-header-title {
+      margin-top: 14px;
+      margin-bottom: 12px;
+    }
+    .track-name {
+      font-size: clamp(22px, 6vw, 28px);
+    }
+    .track-meta {
+      font-size: 12.5px;
+    }
+    .player-stage {
+      gap: 10px;
+    }
+    .bottom-action-cards {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .enhance-card {
+      grid-column: 1 / -1;
+      flex-direction: row !important;
+      align-items: center !important;
+      justify-content: space-between !important;
+      min-height: 54px !important;
+      padding: 10px 16px !important;
+      border-radius: 14px !important;
+      box-sizing: border-box;
+      gap: 14px;
+    }
+    .enhance-card .card-top-row {
+      width: auto !important;
+      order: 2;
+      height: auto;
+      gap: 12px;
+      justify-content: flex-end;
+      flex-shrink: 0;
+    }
+    .enhance-card .card-bottom-info {
+      width: auto !important;
+      flex: 1;
+      order: 1;
+      align-items: flex-start;
+      text-align: left;
+      min-width: 0;
+    }
+    .enhance-card .card-headline {
+      font-size: 15px;
+      font-weight: 700;
+    }
+    .enhance-card .card-subheadline {
+      display: inline-block;
+      font-size: 12px;
+    }
+    .enhance-card .sub-full {
+      display: inline;
+    }
+    .enhance-card .sub-short {
+      display: none;
+    }
+    .action-card:not(.enhance-card) {
+      padding: 10px 4px;
+      min-height: 60px;
+      border-radius: 14px;
+      align-items: center;
+      text-align: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    .action-card:not(.enhance-card) .card-top-row {
+      justify-content: center;
+      height: 24px;
+    }
+    .action-card:not(.enhance-card) .card-bottom-info {
+      align-items: center;
+    }
+    .action-card:not(.enhance-card) .card-headline {
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .action-card:not(.enhance-card) .card-subheadline {
+      display: none;
+    }
+    .action-card:not(.enhance-card) .soon-badge {
+      display: inline-block;
+      font-size: 9px;
+      font-weight: 600;
+      padding: 1px 5px;
+      line-height: 1.1;
+      border-radius: 9999px;
+      background: var(--bg-surface-sunken);
+      color: var(--text-dim);
+    }
+    .action-card:not(.enhance-card) .edit-headline-row {
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+    }
+    .action-card:not(.enhance-card) :global(svg) {
+      width: 20px !important;
+      height: 20px !important;
+    }
+    .toggle-switch {
+      width: 42px;
+      height: 24px;
+      padding: 0 3px;
+    }
+    .toggle-knob {
+      width: 18px;
+      height: 18px;
+    }
+    .toggle-switch.active .toggle-knob {
+      transform: translateX(18px);
+    }
+  }
+
+  @media (orientation: landscape) and (max-height: 720px) {
+    .panel-detail {
+      padding: 10px 18px 12px;
     }
     .track-header-title {
       margin-bottom: 4px;
     }
     .player-stage {
-      gap: 12px;
+      gap: 10px;
     }
     .bottom-action-cards {
-      margin-bottom: 8px;
+      margin-bottom: 6px;
     }
     .action-card {
-      min-height: 98px;
-      padding: 12px 14px;
+      min-height: 80px;
+      padding: 10px 12px;
+    }
+  }
+
+  @media (orientation: landscape) and (max-height: 540px) {
+    .panel-detail {
+      padding: 6px 16px 8px;
+    }
+    .detail-topbar {
+      margin-bottom: 4px;
+    }
+    .btn-nav {
+      padding: 5px 12px;
+      font-size: 12px;
+    }
+    .track-header-title {
+      margin-bottom: 2px;
+    }
+    .track-name {
+      font-size: 19px;
+    }
+    .track-meta {
+      font-size: 11px;
+    }
+    .player-stage {
+      gap: 6px;
+    }
+    .bottom-action-cards {
+      margin-bottom: 0;
+      gap: 6px;
+    }
+    .action-card {
+      min-height: 52px;
+      padding: 6px 8px;
+      border-radius: 10px;
+    }
+    .card-headline {
+      font-size: 11px;
+    }
+    .card-subheadline {
+      display: none;
+    }
+    .action-card :global(svg) {
+      width: 18px !important;
+      height: 18px !important;
+    }
+    .toggle-switch {
+      width: 28px;
+      height: 16px;
+      padding: 0 2px;
+    }
+    .toggle-knob {
+      width: 12px;
+      height: 12px;
+    }
+    .toggle-switch.active .toggle-knob {
+      transform: translateX(12px);
     }
   }
 </style>

@@ -5,10 +5,12 @@
   import PanelTrackDetail from './lib/PanelTrackDetail.svelte';
   import SettingsDrawer from './lib/SettingsDrawer.svelte';
   import DiagnosticsDrawer from './lib/DiagnosticsDrawer.svelte';
+  import SplashScreen from './lib/SplashScreen.svelte';
   import type { ViewScreen } from './lib/types';
   import { currentTheme, applyTheme } from './lib/theme';
   import { onMount } from 'svelte';
 
+  let showSplash = true;
   let currentView: ViewScreen = 'home';
   let activeTrackId = 'track_01';
   let showSettings = false;
@@ -122,17 +124,23 @@
       onClose={closeDiagnostics}
     />
   {/if}
+
+  {#if showSplash}
+    <SplashScreen onFinish={() => (showSplash = false)} />
+  {/if}
 </div>
 
 <style>
   .app-root {
-    width: 100vw;
-    height: 100vh;
+    width: 100%;
+    height: 100%;
     display: flex;
     flex-direction: column;
     background-color: var(--bg-app);
     overflow: hidden;
     position: relative;
+    overscroll-behavior: none;
+    touch-action: manipulation;
   }
 
   .view-viewport {
@@ -144,5 +152,6 @@
     flex-direction: column;
     overflow: hidden;
     position: relative;
+    overscroll-behavior: none;
   }
 </style>

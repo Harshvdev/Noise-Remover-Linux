@@ -25,8 +25,12 @@
   let isLatestPlaying = false;
   let latestPlaybackPos = 0.0;
   let playbackTicker: ReturnType<typeof setInterval>;
+  let isDesktop = true;
 
   onMount(async () => {
+    if (typeof navigator !== 'undefined') {
+      isDesktop = !/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+    }
     // Poll mic stats periodically for real-time responsiveness
     statsPollInterval = setInterval(async () => {
       try {
@@ -150,32 +154,45 @@
 
 <div class="panel-home">
   <!-- Top Navigation Header -->
-  <header class="home-header">
-    <div class="brand-group">
-      <!-- Waveform Icon (Brand logo left untouched as requested) -->
-      <div class="header-logo">
-        <span class="bar bar-1"></span>
-        <span class="bar bar-2"></span>
-        <span class="bar bar-3"></span>
-        <span class="bar bar-4"></span>
-        <span class="bar bar-5"></span>
+  <header class="home-header" class:mobile-header={!isDesktop}>
+    {#if isDesktop}
+      <div class="brand-group">
+        <!-- Waveform Icon (Brand logo) -->
+        <div class="header-logo">
+          <span class="bar bar-1"></span>
+          <span class="bar bar-2"></span>
+          <span class="bar bar-3"></span>
+          <span class="bar bar-4"></span>
+          <span class="bar bar-5"></span>
+        </div>
+        <div class="brand-text">
+          <h1 class="brand-title">Voice Cleaner</h1>
+          <p class="brand-subtitle">Clear Voice. Pure Sound.</p>
+        </div>
       </div>
-      <div class="brand-text">
-        <h1 class="brand-title">Voice Cleaner</h1>
-        <p class="brand-subtitle">Clear Voice. Pure Sound.</p>
+    {:else}
+      <div class="brand-group mobile-brand">
+        <div class="header-logo">
+          <span class="bar bar-1"></span>
+          <span class="bar bar-2"></span>
+          <span class="bar bar-3"></span>
+          <span class="bar bar-4"></span>
+          <span class="bar bar-5"></span>
+        </div>
+        <h1 class="brand-title-mobile">Voice Cleaner</h1>
       </div>
-    </div>
+    {/if}
 
-    <!-- Settings Button (matching panel-1.png squircle style) -->
-    <button class="btn-nav" onclick={onOpenSettings}>
+    <!-- Settings Button -->
+    <button class="btn-nav btn-settings" onclick={onOpenSettings} aria-label="Settings">
       <Settings size={18} color="var(--text-main)" />
-      <span>Settings</span>
+      {#if isDesktop}<span>Settings</span>{/if}
     </button>
   </header>
 
   <!-- Center Hero Area -->
   <main class="home-center">
-    <!-- Horizontal Live Waveform with Noise Cloud (UNTOUCHED) -->
+    <!-- Horizontal Live Waveform with Noise Cloud -->
     <div class="live-wave-wrapper">
       <WaveformLive {isRecording} {isCalibrating} level={micLevel} spectrum={liveSpectrum} />
     </div>
@@ -211,7 +228,7 @@
 
     <div class="footer-right">
       <!-- Recordings List Button with Accent List Icon -->
-      <button class="btn-nav" onclick={onNavigateRecordings}>
+      <button class="btn-nav btn-recordings-list" onclick={onNavigateRecordings}>
         <List size={18} color="var(--accent-lime)" strokeWidth={2.4} />
         <span>Recordings List</span>
       </button>
@@ -234,10 +251,13 @@
     display: flex;
     flex-direction: column;
     justify-content: space-between;
-    padding: 24px 36px;
+    padding: clamp(14px, 2.5vh, 24px) clamp(16px, 3.5vw, 36px);
     background-color: var(--bg-app);
     position: relative;
     overflow: hidden;
+    box-sizing: border-box;
+    overscroll-behavior: none;
+    touch-action: manipulation;
   }
 
   .home-header {
@@ -246,12 +266,13 @@
     justify-content: space-between;
     width: 100%;
     z-index: 10;
+    flex-shrink: 0;
   }
 
   .brand-group {
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 12px;
   }
 
   /* Brand Logo bars left untouched as requested */
@@ -286,10 +307,11 @@
     font-weight: 700;
     color: var(--text-main);
     letter-spacing: -0.5px;
+    line-height: 1.1;
   }
 
   .brand-subtitle {
-    font-size: 13.5px;
+    font-size: 13px;
     color: var(--text-muted);
     font-weight: 400;
   }
@@ -298,17 +320,18 @@
   .btn-nav {
     display: inline-flex;
     align-items: center;
-    gap: 9px;
+    gap: 8px;
     background: var(--bg-card);
     border: 1px solid var(--border-subtle);
     color: var(--text-main);
-    padding: 9px 18px;
+    padding: 8px 16px;
     border-radius: 14px;
     font-size: 13.5px;
     font-weight: 500;
     cursor: pointer;
     box-shadow: var(--shadow-card);
     transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+    flex-shrink: 0;
   }
 
   .btn-nav:hover {
@@ -327,23 +350,28 @@
     align-items: center;
     justify-content: center;
     flex: 1;
-    gap: 16px;
+    min-height: 0;
+    gap: clamp(8px, 2vh, 18px);
   }
 
   .live-wave-wrapper {
     width: 100%;
+    max-width: 680px;
     display: flex;
     justify-content: center;
+    flex-shrink: 1;
+    min-height: 0;
   }
 
   .timer-display {
     font-family: var(--font-brand);
-    font-size: 80px;
+    font-size: clamp(38px, 9vh, 80px);
     font-weight: 700;
     color: var(--text-main);
     letter-spacing: -1.5px;
     line-height: 1;
-    margin: 2px 0 10px 0;
+    margin: 0;
+    flex-shrink: 0;
   }
 
   .home-footer {
@@ -352,12 +380,14 @@
     justify-content: space-between;
     width: 100%;
     z-index: 10;
+    flex-shrink: 0;
   }
 
   .footer-left {
-    min-height: 90px;
+    min-height: 72px;
     display: flex;
     align-items: flex-end;
+    max-width: 100%;
   }
 
   .footer-right {
@@ -365,23 +395,81 @@
     align-items: flex-end;
   }
 
-  /* Responsive Scaling */
-  @media (max-width: 1024px) {
+  /* Portrait and Mobile Adaptations */
+  @media (max-width: 640px), (orientation: portrait) {
     .panel-home {
-      padding: 20px 24px;
+      padding-top: max(clamp(16px, 3vh, 28px), calc(var(--safe-top, 0px) + 14px));
+      padding-bottom: max(clamp(20px, 3.5vh, 32px), calc(var(--safe-bottom, 0px) + 20px));
+      padding-left: max(16px, calc(var(--safe-left, 0px) + 16px));
+      padding-right: max(16px, calc(var(--safe-right, 0px) + 16px));
     }
-    .timer-display {
-      font-size: 64px;
+    .brand-group.mobile-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .brand-title-mobile {
+      font-family: var(--font-brand);
+      font-size: 19px;
+      font-weight: 700;
+      color: var(--text-main);
+      letter-spacing: -0.4px;
+    }
+    .home-header {
+      margin-bottom: 4px;
+    }
+    .home-center {
+      justify-content: center;
+      gap: clamp(16px, 3vh, 32px);
+    }
+    .btn-settings {
+      padding: 9px 11px;
+      border-radius: 12px;
+    }
+    .home-footer {
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+    .footer-left {
+      width: 100%;
+      min-height: auto;
+      justify-content: center;
+    }
+    .footer-right {
+      width: 100%;
+      justify-content: center;
+      display: flex;
+    }
+    .btn-recordings-list {
+      padding: 10px 24px;
+      font-size: 13.5px;
+      border-radius: 9999px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
     }
   }
 
-  @media (max-height: 680px) {
+  @media (orientation: landscape) and (max-height: 540px) {
+    .panel-home {
+      padding: 8px 18px;
+    }
     .timer-display {
-      font-size: 56px;
-      margin: 0;
+      font-size: clamp(32px, 8vh, 46px);
     }
     .home-center {
-      gap: 12px;
+      gap: 6px;
+    }
+    .footer-left {
+      min-height: auto;
+    }
+    .header-logo {
+      height: 24px;
+    }
+    .brand-title {
+      font-size: 18px;
+    }
+    .brand-subtitle {
+      display: none;
     }
   }
 </style>

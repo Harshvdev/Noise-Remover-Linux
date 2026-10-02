@@ -7,8 +7,9 @@ recordings/*.wav
 src-tauri/recordings/**/*.wav
 src-tauri/recordings/*.wav
 !recordings/.gitkeep
-models/*.onnx
+**/*.onnx
 !models/.gitkeep
 models/bin/
 tests/target/
 misc/
+*.apk

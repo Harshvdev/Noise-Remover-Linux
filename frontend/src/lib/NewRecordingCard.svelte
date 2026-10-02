@@ -129,9 +129,9 @@
     <!-- Play / Pause Circle Button -->
     <button class="play-btn" onclick={onPlayToggle} title={isPlaying ? 'Pause' : 'Play'}>
       {#if isPlaying}
-        <Pause size={13} fill="#FFFFFF" color="#FFFFFF" />
+        <Pause size={13} fill="var(--text-main)" color="var(--text-main)" />
       {:else}
-        <Play size={13} fill="#FFFFFF" color="#FFFFFF" style="margin-left: 2px;" />
+        <Play size={13} fill="var(--text-main)" color="var(--text-main)" style="margin-left: 2px;" />
       {/if}
     </button>
 
@@ -169,8 +169,10 @@
     background: var(--bg-card);
     border: 1px solid var(--border-subtle);
     border-radius: 16px;
-    padding: 15px 16px;
+    padding: 12px 14px;
     width: 326px;
+    max-width: 100%;
+    box-sizing: border-box;
     box-shadow: var(--shadow-floating);
     cursor: pointer;
     transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
@@ -294,6 +296,6 @@
   }
 
   .star-box-btn.is-fav {
-    border-color: rgba(198, 255, 61, 0.3);
+    border-color: var(--accent-lime);
   }
 </style>
