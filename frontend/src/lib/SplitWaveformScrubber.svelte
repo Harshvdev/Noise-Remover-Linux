@@ -552,7 +552,7 @@
     position: absolute;
     top: 16%;
     bottom: 16%;
-    width: 2.5px;
+    width: 1px;
     pointer-events: auto;
     cursor: grab;
     transform: translateX(-50%);
@@ -583,12 +583,12 @@
     cursor: grabbing;
   }
 
-  /* Distinct high-contrast needle with crisp outline without glow */
+  /* 1px thin black playhead needle */
   .playhead-pin .pin-line {
     width: 100%;
     height: 100%;
-    background-color: #FFFFFF;
-    box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.85);
+    background-color: #000000;
+    box-shadow: none;
     border-radius: 9999px;
   }
 
