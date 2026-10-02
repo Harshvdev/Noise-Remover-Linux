@@ -65,13 +65,13 @@
     width: 144px;
     height: 144px;
     border-radius: 50%;
-    background: #141417;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--bezel-bg);
+    border: 1px solid var(--border-subtle);
     display: flex;
     align-items: center;
     justify-content: center;
     position: relative;
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow-card);
   }
 
   .meter-svg {
@@ -85,7 +85,7 @@
 
   .track-circle {
     fill: none;
-    stroke: #2E2E36;
+    stroke: var(--bezel-track);
     stroke-width: 4.5;
   }
 
@@ -137,7 +137,7 @@
 
   .caption {
     font-size: 14px;
-    color: rgba(255, 255, 255, 0.45);
+    color: var(--text-muted);
     font-weight: 400;
     letter-spacing: -0.2px;
   }

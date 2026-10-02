@@ -1,21 +1,81 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 
-:root {
+:root, [data-theme="light"] {
+  --theme-mode: light;
+  --bg-app: #F5F6F9;
+  --bg-card: #FFFFFF;
+  --bg-card-hover: #F8F9FA;
+  --bg-card-active: #EEF0F4;
+  --bg-surface-sunken: #EAEBED;
+  --bg-modal: #FFFFFF;
+  --bg-pill: #FFFFFF;
+  --border-subtle: rgba(0, 0, 0, 0.08);
+  --border-medium: rgba(0, 0, 0, 0.14);
+  --border-strong: rgba(0, 0, 0, 0.22);
+  --accent-lime: #FF6600; /* Warm vivid studio orange replacing lime */
+  --accent-lime-hover: #FF771A;
+  --accent-lime-dim: rgba(255, 102, 0, 0.12);
+  --accent-lime-glow: rgba(255, 102, 0, 0.35);
+  --text-on-accent: #FFFFFF;
+  --accent-red: #FF3B30;
+  --accent-red-glow: rgba(255, 59, 48, 0.4);
+  --text-white: #111827;
+  --text-main: #111827;
+  --text-secondary: #4B5563;
+  --text-muted: #6B7280;
+  --text-dim: #9CA3AF;
+  --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.06);
+  --shadow-floating: 0 12px 32px rgba(0, 0, 0, 0.12);
+  --font-brand: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+  --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+
+  /* Element tokens */
+  --bezel-bg: #EAEBED;
+  --bezel-track: #D2D4DC;
+  --toggle-inactive-bg: #D1D5DB;
+  --slider-track: #E5E7EB;
+  --wave-idle: rgba(0, 0, 0, 0.08);
+  --wave-unplayed: rgba(0, 0, 0, 0.22);
+  --modal-backdrop: rgba(15, 23, 42, 0.55);
+}
+
+[data-theme="dark"] {
+  --theme-mode: dark;
   --bg-app: #0B0B0D;
-  --bg-card: #16161A;
+  --bg-card: #141417;
   --bg-card-hover: #1C1C22;
+  --bg-card-active: #22222A;
+  --bg-surface-sunken: #0B0B0E;
+  --bg-modal: #16161A;
   --bg-pill: #1C1C22;
   --border-subtle: rgba(255, 255, 255, 0.08);
   --border-medium: rgba(255, 255, 255, 0.14);
+  --border-strong: rgba(255, 255, 255, 0.22);
   --accent-lime: #C6FF3D;
+  --accent-lime-hover: #D4FF5E;
+  --accent-lime-dim: rgba(198, 255, 61, 0.12);
   --accent-lime-glow: rgba(198, 255, 61, 0.35);
+  --text-on-accent: #000000;
   --accent-red: #FF3B30;
   --accent-red-glow: rgba(255, 59, 48, 0.4);
   --text-white: #FFFFFF;
+  --text-main: #FFFFFF;
+  --text-secondary: rgba(255, 255, 255, 0.75);
   --text-muted: #8E8E93;
   --text-dim: #545458;
+  --shadow-card: 0 4px 18px rgba(0, 0, 0, 0.45);
+  --shadow-floating: 0 16px 40px rgba(0, 0, 0, 0.75);
   --font-brand: 'Space Grotesk', system-ui, -apple-system, sans-serif;
   --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+
+  /* Element tokens */
+  --bezel-bg: #141417;
+  --bezel-track: #2E2E36;
+  --toggle-inactive-bg: #282830;
+  --slider-track: #25252C;
+  --wave-idle: rgba(255, 255, 255, 0.08);
+  --wave-unplayed: rgba(255, 255, 255, 0.22);
+  --modal-backdrop: rgba(11, 11, 13, 0.88);
 }
 
 * {
@@ -33,10 +93,11 @@ html, body {
   padding: 0;
   overflow: hidden;
   background-color: var(--bg-app);
-  color: var(--text-white);
+  color: var(--text-main);
   font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.25s ease, color 0.25s ease;
 }
 
 #app {
@@ -60,11 +121,11 @@ html, body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--border-medium);
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.25);
+  background: var(--border-strong);
 }
 
 /* Modern pill button style */
@@ -74,13 +135,14 @@ html, body {
   gap: 8px;
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
-  color: var(--text-white);
+  color: var(--text-main);
   padding: 9px 18px;
   border-radius: 9999px;
   font-size: 13.5px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: var(--shadow-card);
 }
 
 .btn-pill:hover {
@@ -95,13 +157,13 @@ html, body {
 
 .btn-pill-lime {
   background: var(--accent-lime);
-  color: #000000;
+  color: var(--text-on-accent);
   border-color: var(--accent-lime);
   font-weight: 600;
 }
 
 .btn-pill-lime:hover {
-  background: #D4FF5E;
+  background: var(--accent-lime-hover);
 }
 
 /* Toggle Switch */
@@ -109,11 +171,11 @@ html, body {
   position: relative;
   width: 44px;
   height: 25px;
-  background-color: #282830;
+  background-color: var(--toggle-inactive-bg);
   border-radius: 9999px;
   cursor: pointer;
   transition: background-color 0.22s ease, border-color 0.22s ease;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border-subtle);
 }
 
 .toggle-switch.active {
@@ -130,7 +192,7 @@ html, body {
   background-color: #FFFFFF;
   border-radius: 9999px;
   transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.35);
 }
 
 .toggle-switch.active .toggle-knob {
@@ -144,7 +206,7 @@ input[type="range"].lime-slider {
   appearance: none;
   width: 100%;
   height: 4px;
-  background: #25252C;
+  background: var(--slider-track);
   border-radius: 9999px;
   outline: none;
   cursor: pointer;
@@ -170,6 +232,7 @@ input[type="range"].lime-slider::-webkit-slider-thumb:hover {
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
   border-radius: 16px;
+  box-shadow: var(--shadow-card);
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 

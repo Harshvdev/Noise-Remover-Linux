@@ -48,7 +48,7 @@
   .countdown-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(11, 11, 13, 0.88);
+    background: var(--modal-backdrop);
     backdrop-filter: blur(12px);
     display: flex;
     align-items: center;
@@ -64,10 +64,10 @@
     text-align: center;
     max-width: 440px;
     padding: 36px 32px;
-    background: #16161A;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--bg-modal);
+    border: 1px solid var(--border-subtle);
     border-radius: 24px;
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+    box-shadow: var(--shadow-floating);
   }
 
   .countdown-ring {
@@ -102,7 +102,7 @@
     font-size: 20px;
     font-weight: 600;
     margin-bottom: 8px;
-    color: #FFFFFF;
+    color: var(--text-main);
   }
 
   .countdown-text p {
@@ -113,18 +113,18 @@
   }
 
   .btn-cancel {
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #FFFFFF;
+    background: var(--bg-card-hover);
+    border: 1px solid var(--border-medium);
+    color: var(--text-main);
     padding: 8px 24px;
     border-radius: 9999px;
     font-size: 13.5px;
     cursor: pointer;
-    transition: background 0.18s ease;
+    transition: all 0.18s ease;
   }
 
   .btn-cancel:hover {
-    background: rgba(255, 255, 255, 0.16);
+    background: var(--bg-card-active);
   }
 
   @keyframes pulseScale {

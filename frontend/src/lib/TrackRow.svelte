@@ -157,9 +157,9 @@
     title={isPlaying && isCurrentTrack ? 'Pause' : 'Play'}
   >
     {#if isPlaying && isCurrentTrack}
-      <Pause size={15} fill="#000000" color="#000000" />
+      <Pause size={15} fill="var(--text-on-accent)" color="var(--text-on-accent)" />
     {:else}
-      <Play size={13} fill="#FFFFFF" color="#FFFFFF" style="margin-left: 2px;" />
+      <Play size={13} fill="var(--text-main)" color="var(--text-main)" style="margin-left: 2px;" />
     {/if}
   </button>
 
@@ -232,7 +232,7 @@
       <Star
         size={16}
         fill={track.is_favorite ? 'var(--accent-lime)' : 'none'}
-        color={track.is_favorite ? 'var(--accent-lime)' : 'rgba(255, 255, 255, 0.75)'}
+        color={track.is_favorite ? 'var(--accent-lime)' : 'var(--text-muted)'}
         strokeWidth={1.8}
       />
     </button>
@@ -243,7 +243,7 @@
       onclick={onDelete}
       title="Delete Track"
     >
-      <Trash2 size={16} color="rgba(255, 255, 255, 0.75)" strokeWidth={1.8} />
+      <Trash2 size={16} color="var(--text-muted)" strokeWidth={1.8} />
     </button>
   </div>
 </div>
@@ -252,9 +252,10 @@
   .track-row {
     width: 100%;
     height: 58px;
-    background: #111114;
-    border: 1px solid rgba(255, 255, 255, 0.05);
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
     border-radius: 14px;
+    box-shadow: var(--shadow-card);
     display: flex;
     align-items: center;
     padding: 0 18px;
@@ -265,11 +266,11 @@
   }
 
   .track-row:hover {
-    background: #16161B;
-    border-color: rgba(255, 255, 255, 0.12);
+    background: var(--bg-card-hover);
+    border-color: var(--border-medium);
   }
 
-  /* Active Track with Lime Border matching panel-2.png */
+  /* Active Track with Accent Border matching panel-2.png */
   .track-row.is-active-playing {
     border: 1.5px solid var(--accent-lime);
   }
@@ -278,7 +279,7 @@
     width: 38px;
     height: 38px;
     border-radius: 50%;
-    background: #202026;
+    background: var(--bg-surface-sunken);
     border: none;
     display: flex;
     align-items: center;
@@ -290,7 +291,7 @@
 
   .track-play-btn:hover {
     transform: scale(1.06);
-    background: #2C2C34;
+    background: var(--bg-card-active);
   }
 
   .track-play-btn.btn-active {
@@ -308,13 +309,13 @@
   .track-title {
     font-size: 15px;
     font-weight: 600;
-    color: #FFFFFF;
+    color: var(--text-main);
     letter-spacing: -0.2px;
   }
 
   .track-date {
     font-size: 12px;
-    color: rgba(255, 255, 255, 0.45);
+    color: var(--text-muted);
   }
 
   .track-waveform-wrapper {
@@ -349,7 +350,7 @@
   }
 
   .wave-bar.is-idle {
-    background-color: #282832;
+    background-color: var(--wave-idle);
   }
 
   .wave-bar.is-past {
@@ -357,7 +358,7 @@
   }
 
   .wave-bar:not(.is-past):not(.is-idle) {
-    background-color: #383844;
+    background-color: var(--wave-unplayed);
   }
 
   .playhead-needle {
@@ -365,7 +366,7 @@
     top: 3px;
     bottom: 3px;
     width: 2px;
-    background-color: #FFFFFF;
+    background-color: var(--text-main);
     pointer-events: none;
     z-index: 10;
     transform: translateX(-50%);
@@ -375,7 +376,7 @@
     width: 7px;
     height: 7px;
     border-radius: 50%;
-    background-color: #FFFFFF;
+    background-color: var(--text-main);
     position: absolute;
     top: -2.5px;
     left: 50%;
@@ -390,7 +391,7 @@
 
   .track-duration {
     font-size: 12.5px;
-    color: rgba(255, 255, 255, 0.55);
+    color: var(--text-muted);
     width: 100px;
     text-align: right;
     flex-shrink: 0;
@@ -407,8 +408,8 @@
     width: 34px;
     height: 34px;
     border-radius: 8px;
-    background: #16161B;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--bg-surface-sunken);
+    border: 1px solid var(--border-subtle);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -417,8 +418,8 @@
   }
 
   .action-box-btn:hover {
-    background: #202028;
-    border-color: rgba(255, 255, 255, 0.18);
+    background: var(--bg-card-hover);
+    border-color: var(--border-medium);
     transform: scale(1.05);
   }
 

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { Play, Pause } from '@lucide/svelte';
+  import { themeColors } from './theme';
 
   export let cleanWaveform: number[] = [];
   export let rawWaveform: number[] = [];
@@ -168,10 +169,12 @@
       // No glow halo on waveform bars
       ctx.shadowBlur = 0;
 
-      // Interpolate bar color smoothly between Neon Lime #C6FF3D (198, 255, 61, 1.0) and Raw Silver (215, 215, 230, 0.75)
-      const r = Math.round(198 * t + 215 * (1 - t));
-      const g = Math.round(255 * t + 215 * (1 - t));
-      const b = Math.round(61 * t + 230 * (1 - t));
+      // Interpolate bar color smoothly between Clean Accent ($themeColors.accentRgb) and Raw ($themeColors.rawWaveRgb)
+      const accent = $themeColors.accentRgb;
+      const raw = $themeColors.rawWaveRgb;
+      const r = Math.round(accent[0] * t + raw[0] * (1 - t));
+      const g = Math.round(accent[1] * t + raw[1] * (1 - t));
+      const b = Math.round(accent[2] * t + raw[2] * (1 - t));
       const a = (1.0 * t + 0.75 * (1 - t)).toFixed(3);
       ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${a})`;
 
@@ -457,9 +460,9 @@
         aria-label={isPlaying ? 'Pause' : 'Play'}
       >
         {#if isPlaying}
-          <Pause size={22} fill="#000000" color="#000000" />
+          <Pause size={22} fill="var(--text-on-accent)" color="var(--text-on-accent)" />
         {:else}
-          <Play size={22} fill="#000000" color="#000000" style="margin-left: 2px;" />
+          <Play size={22} fill="var(--text-on-accent)" color="var(--text-on-accent)" style="margin-left: 2px;" />
         {/if}
       </button>
     </div>
@@ -598,12 +601,12 @@
     width: 54px;
     height: 54px;
     border-radius: 50%;
-    background-color: #FFFFFF;
+    background-color: var(--accent-lime);
     border: none;
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.65);
+    box-shadow: var(--shadow-floating);
     cursor: pointer;
     z-index: 15;
     opacity: 0;
@@ -627,8 +630,8 @@
 
   .center-play-btn:hover {
     transform: translate(-50%, -50%) scale(1.08);
-    background-color: #F8F8F8;
-    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.75);
+    background-color: var(--accent-lime-hover);
+    box-shadow: var(--shadow-floating);
   }
 
   .center-play-btn:active {
@@ -648,7 +651,7 @@
 
   .time-label {
     font-size: 13.5px;
-    color: #FFFFFF;
+    color: var(--text-main);
     font-weight: 600;
     width: 48px;
     flex-shrink: 0;
@@ -667,7 +670,7 @@
   .scrubber-track {
     flex: 1;
     height: 4px;
-    background: #202026;
+    background: var(--slider-track);
     border-radius: 9999px;
     position: relative;
     cursor: pointer;
@@ -681,7 +684,7 @@
 
   .scrubber-fill {
     height: 100%;
-    background-color: #FFFFFF;
+    background-color: var(--text-main);
     border-radius: 9999px;
     transition: background-color 0.3s ease;
   }
@@ -696,8 +699,9 @@
     width: 14px;
     height: 14px;
     border-radius: 50%;
-    background-color: #FFFFFF;
+    background-color: var(--text-main);
     transform: translate(-50%, -50%);
+    box-shadow: var(--shadow-card);
     transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.3s ease;
   }
 

@@ -168,7 +168,7 @@
     </button>
 
     <button class="btn-nav" onclick={onOpenSettings}>
-      <Settings size={18} color="rgba(255,255,255,0.9)" />
+      <Settings size={18} color="var(--text-main)" />
       <span>Settings</span>
     </button>
   </header>
@@ -187,7 +187,7 @@
         class:active-tab={filter === 'all'}
         onclick={() => (filter = 'all')}
       >
-        <LayoutGrid size={15} color={filter === 'all' ? '#000000' : 'rgba(255,255,255,0.85)'} />
+        <LayoutGrid size={15} color={filter === 'all' ? 'var(--text-on-accent)' : 'var(--text-muted)'} />
         <span>All</span>
       </button>
 
@@ -198,8 +198,8 @@
       >
         <Star
           size={15}
-          fill={filter === 'favorites' ? '#000000' : 'none'}
-          color={filter === 'favorites' ? '#000000' : 'rgba(255,255,255,0.85)'}
+          fill={filter === 'favorites' ? 'var(--text-on-accent)' : 'none'}
+          color={filter === 'favorites' ? 'var(--text-on-accent)' : 'var(--text-muted)'}
           strokeWidth={1.8}
         />
         <span>Favorites</span>
@@ -270,20 +270,21 @@
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    background: #141417;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    color: #FFFFFF;
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-main);
     padding: 9px 18px;
     border-radius: 14px;
     font-size: 13.5px;
     font-weight: 500;
     cursor: pointer;
+    box-shadow: var(--shadow-card);
     transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .btn-nav:hover {
-    background: #1C1C20;
-    border-color: rgba(255, 255, 255, 0.15);
+    background: var(--bg-card-hover);
+    border-color: var(--border-medium);
     transform: translateY(-1px);
   }
 
@@ -310,21 +311,22 @@
     font-family: var(--font-brand);
     font-size: 32px;
     font-weight: 700;
-    color: #FFFFFF;
+    color: var(--text-main);
     letter-spacing: -0.5px;
   }
 
   .page-subtitle {
     font-size: 14px;
-    color: rgba(255, 255, 255, 0.45);
+    color: var(--text-muted);
   }
 
   .filter-controls {
     display: flex;
     align-items: center;
     gap: 4px;
-    background: #141417;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    box-shadow: var(--shadow-card);
     padding: 4px 6px;
     border-radius: 14px;
   }
@@ -335,7 +337,7 @@
     gap: 7px;
     background: transparent;
     border: none;
-    color: rgba(255, 255, 255, 0.85);
+    color: var(--text-muted);
     padding: 7px 16px;
     border-radius: 10px;
     font-size: 13px;
@@ -345,20 +347,20 @@
   }
 
   .filter-tab:hover:not(.active-tab) {
-    color: #FFFFFF;
-    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-main);
+    background: var(--bg-card-hover);
   }
 
   .filter-tab.active-tab {
     background: var(--accent-lime);
-    color: #000000;
+    color: var(--text-on-accent);
     font-weight: 700;
   }
 
   .filter-divider {
     width: 1px;
     height: 18px;
-    background: rgba(255, 255, 255, 0.12);
+    background: var(--border-subtle);
     margin: 0 4px;
   }
 
@@ -385,7 +387,7 @@
     align-items: center;
     justify-content: center;
     height: 200px;
-    color: rgba(255, 255, 255, 0.45);
+    color: var(--text-muted);
     font-size: 15px;
   }
 

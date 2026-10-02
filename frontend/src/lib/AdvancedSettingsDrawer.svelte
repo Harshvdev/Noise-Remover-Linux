@@ -104,7 +104,7 @@
             max="1"
             step="0.01"
             class="lime-slider"
-            style="background: linear-gradient(to right, var(--accent-lime) 0%, var(--accent-lime) {Math.round(settings.harmonic_preservation * 100)}%, #25252C {Math.round(settings.harmonic_preservation * 100)}%, #25252C 100%);"
+            style="background: linear-gradient(to right, var(--accent-lime) 0%, var(--accent-lime) {Math.round(settings.harmonic_preservation * 100)}%, var(--slider-track) {Math.round(settings.harmonic_preservation * 100)}%, var(--slider-track) 100%);"
             bind:value={settings.harmonic_preservation}
             onchange={onSettingsChange}
           />
@@ -149,7 +149,7 @@
               <span class="diag-desc">View noise profile, levels and analysis</span>
             </div>
           </div>
-          <ChevronRight size={18} color="rgba(255,255,255,0.4)" />
+          <ChevronRight size={18} color="var(--text-muted)" />
         </div>
       </div>
     </div>
@@ -160,7 +160,7 @@
   .drawer-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.65);
+    background: var(--modal-backdrop);
     backdrop-filter: blur(8px);
     z-index: 150;
     display: flex;
@@ -171,14 +171,15 @@
   .drawer-content {
     width: min(440px, 100vw);
     height: 100%;
-    background: #141418;
-    border-left: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: -10px 0 40px rgba(0, 0, 0, 0.6);
+    background: var(--bg-modal);
+    border-left: 1px solid var(--border-subtle);
+    box-shadow: var(--shadow-floating);
     display: flex;
     flex-direction: column;
     padding: clamp(20px, 3vh, 28px) clamp(18px, 2.5vw, 24px);
     box-sizing: border-box;
     animation: slideIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+    color: var(--text-main);
   }
 
   .drawer-header {
@@ -187,7 +188,7 @@
     justify-content: space-between;
     margin-bottom: 24px;
     padding-bottom: 16px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid var(--border-subtle);
     flex-shrink: 0;
   }
 
@@ -201,14 +202,14 @@
     font-family: var(--font-brand);
     font-size: 20px;
     font-weight: 700;
-    color: #FFFFFF;
+    color: var(--text-main);
     letter-spacing: -0.3px;
   }
 
   .close-btn {
     background: transparent;
     border: none;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--text-muted);
     cursor: pointer;
     padding: 6px;
     border-radius: 6px;
@@ -219,8 +220,8 @@
   }
 
   .close-btn:hover {
-    color: #FFFFFF;
-    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-main);
+    background: var(--bg-card-hover);
   }
 
   .drawer-body {
@@ -255,12 +256,12 @@
   .setting-name {
     font-size: 14px;
     font-weight: 600;
-    color: #FFFFFF;
+    color: var(--text-main);
   }
 
   .setting-desc {
     font-size: 12px;
-    color: rgba(255, 255, 255, 0.45);
+    color: var(--text-muted);
     line-height: 1.35;
   }
 
@@ -279,7 +280,7 @@
   .slider-value {
     font-size: 14px;
     font-weight: 600;
-    color: #FFFFFF;
+    color: var(--text-main);
   }
 
   .select-wrapper {
@@ -290,9 +291,9 @@
 
   .select-input {
     width: 100%;
-    background: #0B0B0E;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #FFFFFF;
+    background: var(--bg-surface-sunken);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-main);
     padding: 10px 14px;
     border-radius: 12px;
     font-size: 13.5px;
@@ -304,7 +305,7 @@
   }
 
   .select-input:hover {
-    border-color: rgba(255, 255, 255, 0.2);
+    border-color: var(--border-medium);
   }
 
   :global(.select-chevron) {
@@ -313,12 +314,12 @@
     top: 50%;
     transform: translateY(-50%);
     pointer-events: none;
-    color: rgba(255, 255, 255, 0.45);
+    color: var(--text-muted);
   }
 
   .diagnostics-trigger-row {
-    background: #0B0B0E;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--bg-surface-sunken);
+    border: 1px solid var(--border-subtle);
     border-radius: 14px;
     padding: 14px 16px;
     display: flex;
@@ -330,8 +331,8 @@
   }
 
   .diagnostics-trigger-row:hover {
-    border-color: rgba(255, 255, 255, 0.2);
-    background: #121217;
+    border-color: var(--border-medium);
+    background: var(--bg-card-hover);
   }
 
   .diag-left {
@@ -349,7 +350,7 @@
 
   .diag-bars .bar {
     width: 3px;
-    background-color: #FFFFFF;
+    background-color: var(--accent-lime);
     border-radius: 9999px;
   }
 
@@ -367,12 +368,12 @@
   .diag-title {
     font-size: 13.5px;
     font-weight: 600;
-    color: #FFFFFF;
+    color: var(--text-main);
   }
 
   .diag-desc {
     font-size: 11.5px;
-    color: rgba(255, 255, 255, 0.45);
+    color: var(--text-muted);
   }
 
   @keyframes slideIn {

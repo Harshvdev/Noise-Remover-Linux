@@ -51,8 +51,8 @@
     align-items: center;
     justify-content: space-between;
     padding: 0 14px;
-    background: #0B0B0D;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    background: var(--bg-app);
+    border-bottom: 1px solid var(--border-subtle);
     z-index: 100;
   }
 
@@ -85,7 +85,7 @@
   .app-title {
     font-size: 13px;
     font-weight: 600;
-    color: rgba(255, 255, 255, 0.85);
+    color: var(--text-main);
     letter-spacing: -0.2px;
   }
 
@@ -103,15 +103,15 @@
     justify-content: center;
     background: transparent;
     border: none;
-    color: rgba(255, 255, 255, 0.55);
+    color: var(--text-muted);
     border-radius: 4px;
     cursor: pointer;
     transition: all 0.15s ease;
   }
 
   .win-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: #FFFFFF;
+    background: var(--bg-card-hover);
+    color: var(--text-main);
   }
 
   .win-btn-close:hover {

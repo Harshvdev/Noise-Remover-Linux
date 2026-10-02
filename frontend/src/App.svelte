@@ -6,13 +6,13 @@
   import SettingsDrawer from './lib/SettingsDrawer.svelte';
   import DiagnosticsDrawer from './lib/DiagnosticsDrawer.svelte';
   import type { ViewScreen } from './lib/types';
+  import { currentTheme, applyTheme } from './lib/theme';
+  import { onMount } from 'svelte';
 
   let currentView: ViewScreen = 'home';
   let activeTrackId = 'track_01';
   let showSettings = false;
   let diagnosticsTrackId: string | null = null;
-
-  import { onMount } from 'svelte';
 
   function navigateToHome() {
     currentView = 'home';
@@ -70,6 +70,7 @@
   }
 
   onMount(() => {
+    applyTheme($currentTheme);
     const handleHash = () => {
       const h = window.location.hash.toLowerCase();
       if (h.includes('recordings')) navigateToRecordings();

@@ -157,7 +157,7 @@
       <Star
         size={15}
         fill={track.is_favorite ? 'var(--accent-lime)' : 'none'}
-        color={track.is_favorite ? 'var(--accent-lime)' : 'rgba(255,255,255,0.75)'}
+        color={track.is_favorite ? 'var(--accent-lime)' : 'var(--text-muted)'}
         strokeWidth={1.8}
       />
     </button>
@@ -166,18 +166,18 @@
 
 <style>
   .new-recording-card {
-    background: #111114;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
     border-radius: 16px;
     padding: 15px 16px;
     width: 326px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    box-shadow: var(--shadow-floating);
     cursor: pointer;
     transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .new-recording-card:hover {
-    border-color: rgba(255, 255, 255, 0.14);
+    border-color: var(--border-medium);
     transform: translateY(-2px);
   }
 
@@ -197,20 +197,20 @@
   .card-title {
     font-size: 14.5px;
     font-weight: 600;
-    color: #FFFFFF;
+    color: var(--text-main);
     letter-spacing: -0.2px;
   }
 
   .card-meta {
     font-size: 12.5px;
-    color: rgba(255, 255, 255, 0.45);
+    color: var(--text-muted);
     font-weight: 400;
   }
 
   .icon-btn-close {
     background: transparent;
     border: none;
-    color: rgba(255, 255, 255, 0.45);
+    color: var(--text-muted);
     cursor: pointer;
     padding: 4px;
     border-radius: 4px;
@@ -221,7 +221,7 @@
   }
 
   .icon-btn-close:hover {
-    color: #FFFFFF;
+    color: var(--text-main);
   }
 
   .player-row {
@@ -234,19 +234,19 @@
     width: 34px;
     height: 34px;
     border-radius: 50%;
-    background: #222227;
+    background: var(--bg-surface-sunken);
     border: none;
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    color: #FFFFFF;
+    color: var(--text-main);
     flex-shrink: 0;
     transition: background 0.15s ease, transform 0.12s ease;
   }
 
   .play-btn:hover {
-    background: #2E2E36;
+    background: var(--bg-card-active);
     transform: scale(1.05);
   }
 
@@ -269,7 +269,7 @@
 
   .time-label {
     font-size: 11.5px;
-    color: rgba(255, 255, 255, 0.45);
+    color: var(--text-muted);
     flex-shrink: 0;
   }
 
@@ -277,8 +277,8 @@
     width: 32px;
     height: 32px;
     border-radius: 8px;
-    background: #18181D;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--bg-surface-sunken);
+    border: 1px solid var(--border-subtle);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -288,8 +288,8 @@
   }
 
   .star-box-btn:hover {
-    background: #22222A;
-    border-color: rgba(255, 255, 255, 0.16);
+    background: var(--bg-card-hover);
+    border-color: var(--border-medium);
     transform: scale(1.05);
   }
 

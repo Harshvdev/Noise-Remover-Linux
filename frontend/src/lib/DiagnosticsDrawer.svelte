@@ -102,7 +102,7 @@
   .drawer-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.65);
+    background: var(--modal-backdrop);
     backdrop-filter: blur(8px);
     z-index: 150;
     display: flex;
@@ -113,14 +113,15 @@
   .drawer-content {
     width: min(440px, 100vw);
     height: 100%;
-    background: #16161A;
-    border-left: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: -10px 0 40px rgba(0, 0, 0, 0.6);
+    background: var(--bg-modal);
+    border-left: 1px solid var(--border-subtle);
+    box-shadow: var(--shadow-floating);
     display: flex;
     flex-direction: column;
     padding: clamp(16px, 3vh, 28px) clamp(16px, 3vw, 24px);
     box-sizing: border-box;
     animation: slideIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+    color: var(--text-main);
   }
 
   .drawer-header {
@@ -129,7 +130,7 @@
     justify-content: space-between;
     margin-bottom: 24px;
     padding-bottom: 16px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid var(--border-subtle);
   }
 
   .header-title {
@@ -142,24 +143,25 @@
     font-family: var(--font-brand);
     font-size: 20px;
     font-weight: 700;
-    color: #FFFFFF;
+    color: var(--text-main);
   }
 
   .close-btn {
     background: transparent;
     border: none;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--text-muted);
     cursor: pointer;
     padding: 6px;
     border-radius: 6px;
     display: flex;
     align-items: center;
     justify-content: center;
+    transition: all 0.15s ease;
   }
 
   .close-btn:hover {
-    color: #FFFFFF;
-    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-main);
+    background: var(--bg-card-hover);
   }
 
   .drawer-body {
@@ -184,8 +186,8 @@
   }
 
   .spectrum-card {
-    background: #0B0B0D;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--bg-surface-sunken);
+    border: 1px solid var(--border-subtle);
     border-radius: 14px;
     padding: 16px;
     display: flex;
@@ -227,8 +229,8 @@
   }
 
   .metric-card {
-    background: #0B0B0D;
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: var(--bg-surface-sunken);
+    border: 1px solid var(--border-subtle);
     border-radius: 12px;
     padding: 14px;
     display: flex;
@@ -248,7 +250,7 @@
   .metric-val {
     font-size: 15px;
     font-weight: 700;
-    color: #FFFFFF;
+    color: var(--text-main);
   }
 
   .loading-state, .empty-state {

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { themeColors } from './theme';
 
   export let isRecording = false;
   export let isCalibrating = false;
@@ -269,22 +270,20 @@
         const py = centerY + p.yNorm * (24 + cloudAmp * 32);
 
         // Faint noise grain
-        const pAlpha = p.baseAlpha * (0.6 + cloudAmp * 0.8);
-        ctx.fillStyle = `rgba(255, 255, 255, ${pAlpha.toFixed(3)})`;
+        const pAlpha = p.baseAlpha * (0.6 + cloudAmp * 0.8) * $themeColors.particleAlphaBase;
+        ctx.fillStyle = `rgba(${$themeColors.particleRgbPrefix}${pAlpha.toFixed(3)})`;
         ctx.beginPath();
         ctx.arc(px, py, p.size, 0, Math.PI * 2);
         ctx.fill();
       }
 
-      // 6. Draw 128 Symmetrical Lime Bars (from misc/panel-1.png)
+      // 6. Draw 128 Symmetrical Bars using active theme accent
       const barSpacing = width / (NUM_BARS + 1);
       const barWidth = Math.min(3.4, Math.max(2.2, barSpacing * 0.44));
       const dotRadius = barWidth / 2;
       const maxBarHeight = height * 0.78;
 
-      // Electric neon lime from panel-1.png (#C6FF3D) without glow
-      const LIME_COLOR = '#C6FF3D';
-      ctx.fillStyle = LIME_COLOR;
+      ctx.fillStyle = $themeColors.accentHex;
       ctx.shadowBlur = 0;
 
       for (let m = 0; m < NUM_BARS; m++) {

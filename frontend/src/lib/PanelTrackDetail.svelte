@@ -360,7 +360,7 @@
             <Star
               size={24}
               fill={track?.is_favorite ? 'var(--accent-lime)' : 'none'}
-              color={track?.is_favorite ? 'var(--accent-lime)' : 'rgba(255,255,255,0.75)'}
+              color={track?.is_favorite ? 'var(--accent-lime)' : 'var(--text-muted)'}
               strokeWidth={1.8}
             />
           </div>
@@ -372,7 +372,7 @@
         <!-- 3. Edit Card (Disabled "Soon") -->
         <div class="action-card edit-card disabled">
           <div class="card-top-row">
-            <Scissors size={24} color="rgba(255,255,255,0.3)" strokeWidth={1.8} />
+            <Scissors size={24} color="var(--text-dim)" strokeWidth={1.8} />
           </div>
           <div class="card-bottom-info">
             <div class="edit-headline-row">
@@ -391,7 +391,7 @@
           onkeydown={(e) => e.key === 'Enter' && handleOpenFolder()}
         >
           <div class="card-top-row">
-            <Upload size={24} color="rgba(255,255,255,0.75)" strokeWidth={1.8} />
+            <Upload size={24} color="var(--text-main)" strokeWidth={1.8} />
           </div>
           <div class="card-bottom-info">
             <span class="card-headline">Share</span>
@@ -421,7 +421,7 @@
           }}
         >
           <div class="card-top-row">
-            <MoreHorizontal size={24} color="rgba(255,255,255,0.85)" />
+            <MoreHorizontal size={24} color="var(--text-main)" />
           </div>
           <div class="card-bottom-info">
             <span class="card-headline">More</span>
@@ -455,7 +455,7 @@
                   isRenaming = true;
                 }}
               >
-                <Edit3 size={16} color="rgba(255,255,255,0.8)" />
+                <Edit3 size={16} color="var(--text-main)" />
                 <span>Rename Track</span>
               </button>
 
@@ -467,7 +467,7 @@
                   handleOpenFolder();
                 }}
               >
-                <Folder size={16} color="rgba(255,255,255,0.8)" />
+                <Folder size={16} color="var(--text-muted)" />
                 <span>Show in Files</span>
               </button>
 
@@ -539,24 +539,26 @@
   }
 
   /* Squircle nav buttons */
+  /* Squircle nav buttons */
   .btn-nav {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    background: #141417;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    color: #FFFFFF;
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-main);
     padding: 8px 18px;
     border-radius: 14px;
     font-size: 13.5px;
     font-weight: 500;
     cursor: pointer;
+    box-shadow: var(--shadow-card);
     transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .btn-nav:hover {
-    background: #1C1C20;
-    border-color: rgba(255, 255, 255, 0.16);
+    background: var(--bg-card-hover);
+    border-color: var(--border-medium);
     transform: translateY(-1px);
   }
 
@@ -570,8 +572,8 @@
   }
 
   .more-card.more-active {
-    border-color: rgba(255, 255, 255, 0.25);
-    background: #1C1C24;
+    border-color: var(--border-strong);
+    background: var(--bg-card-active);
     transform: none !important;
     z-index: 50;
   }
@@ -581,10 +583,10 @@
     bottom: calc(100% + 10px);
     right: 0;
     width: 210px;
-    background: #18181E;
-    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: var(--bg-modal);
+    border: 1px solid var(--border-subtle);
     border-radius: 14px;
-    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.75);
+    box-shadow: var(--shadow-floating);
     z-index: 60;
     overflow: hidden;
     display: flex;
@@ -607,7 +609,7 @@
   .menu-item {
     background: transparent;
     border: none;
-    color: #FFFFFF;
+    color: var(--text-main);
     padding: 10px 14px;
     text-align: left;
     font-size: 13.5px;
@@ -621,12 +623,12 @@
   }
 
   .menu-item:hover {
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--bg-card-hover);
   }
 
   .menu-divider {
     height: 1px;
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--border-subtle);
     margin: 4px 6px;
   }
 
@@ -646,14 +648,14 @@
     font-family: var(--font-brand);
     font-size: clamp(26px, 3.2vw, 34px);
     font-weight: 700;
-    color: #FFFFFF;
+    color: var(--text-main);
     letter-spacing: -0.5px;
     line-height: 1.1;
   }
 
   .track-meta {
     font-size: 13.5px;
-    color: rgba(255, 255, 255, 0.45);
+    color: var(--text-muted);
     font-weight: 400;
   }
 
@@ -664,9 +666,9 @@
   }
 
   .rename-input {
-    background: #16161A;
+    background: var(--bg-surface-sunken);
     border: 1px solid var(--accent-lime);
-    color: #FFFFFF;
+    color: var(--text-main);
     padding: 6px 12px;
     border-radius: 8px;
     font-size: 20px;
@@ -676,7 +678,7 @@
 
   .btn-save {
     background: var(--accent-lime);
-    color: #000000;
+    color: var(--text-on-accent);
     border: none;
     padding: 7px 16px;
     border-radius: 8px;
@@ -720,9 +722,10 @@
   }
 
   .action-card {
-    background: #121216;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
     border-radius: 18px;
+    box-shadow: var(--shadow-card);
     padding: 16px 16px;
     min-height: 108px;
     min-width: 0;
@@ -739,12 +742,12 @@
   }
 
   .action-card:hover:not(.disabled) {
-    background: #18181E;
-    border-color: rgba(255, 255, 255, 0.16);
+    background: var(--bg-card-hover);
+    border-color: var(--border-medium);
   }
 
   .action-card:active:not(.disabled) {
-    background: #15151A;
+    background: var(--bg-card-active);
   }
 
   .enhance-card {
@@ -753,7 +756,8 @@
   }
 
   .enhance-card.enhance-active {
-    background: #141419;
+    background: var(--bg-card-active);
+    border-color: var(--accent-lime);
   }
 
   .card-top-row {
@@ -784,7 +788,7 @@
 
   .enhance-bars-icon .ebar {
     width: 3px;
-    background-color: rgba(255, 255, 255, 0.35);
+    background-color: var(--wave-unplayed);
     border-radius: 9999px;
     transition: height 0.32s cubic-bezier(0.34, 1.4, 0.64, 1),
                 background-color 0.28s ease;
@@ -813,7 +817,7 @@
     width: 42px;
     height: 24px;
     border-radius: 9999px;
-    background-color: rgba(255, 255, 255, 0.16);
+    background-color: var(--toggle-inactive-bg);
     display: flex;
     align-items: center;
     padding: 0 3px;
@@ -858,7 +862,7 @@
     font-family: var(--font-brand);
     font-size: 16px;
     font-weight: 700;
-    color: #FFFFFF;
+    color: var(--text-main);
     letter-spacing: -0.2px;
     white-space: nowrap;
     overflow: hidden;
@@ -868,7 +872,7 @@
 
   .card-subheadline {
     font-size: 12px;
-    color: rgba(255, 255, 255, 0.45);
+    color: var(--text-muted);
     font-weight: 400;
     white-space: nowrap;
     overflow: hidden;
@@ -878,7 +882,7 @@
   }
 
   .enhance-card.enhance-active .card-subheadline {
-    color: rgba(255, 255, 255, 0.75);
+    color: var(--text-secondary);
   }
 
   .sub-short {
@@ -1001,12 +1005,13 @@
   }
 
   .disabled-text {
-    color: rgba(255, 255, 255, 0.35);
+    color: var(--text-dim);
   }
 
   .soon-badge {
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.55);
+    background: var(--bg-card-hover);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-muted);
     font-size: 10.5px;
     font-weight: 500;
     padding: 2px 7px;

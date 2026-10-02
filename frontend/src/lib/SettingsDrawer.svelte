@@ -2,7 +2,8 @@
   import { onMount } from 'svelte';
   import { api } from './api';
   import type { DeviceDto } from './types';
-  import { X, Mic, Upload, Check } from '@lucide/svelte';
+  import { currentTheme, setTheme } from './theme';
+  import { X, Mic, Upload, Check, Moon, Sun, Settings } from '@lucide/svelte';
 
   export let onClose: () => void;
   export let onTrackImported: (() => void) | undefined = undefined;
@@ -61,8 +62,8 @@
   <div class="drawer-content" onclick={(e) => e.stopPropagation()} role="dialog" tabindex="-1">
     <div class="drawer-header">
       <div class="header-title">
-        <Mic size={20} color="var(--accent-lime)" />
-        <h2>Audio Settings</h2>
+        <Settings size={20} color="var(--accent-lime)" />
+        <h2>Settings</h2>
       </div>
       <button class="close-btn" onclick={onClose} aria-label="Close">
         <X size={18} />
@@ -70,6 +71,62 @@
     </div>
 
     <div class="drawer-body">
+      <!-- Theme & Appearance Section -->
+      <section class="settings-section">
+        <div class="section-label">Appearance & Theme</div>
+        <div class="theme-grid">
+          <div
+            class="theme-card"
+            class:selected={$currentTheme === 'dark'}
+            onclick={() => setTheme('dark')}
+            role="button"
+            tabindex="0"
+            onkeydown={(e) => e.key === 'Enter' && setTheme('dark')}
+          >
+            <div class="theme-card-left">
+              <div class="theme-icon dark-theme-icon">
+                <Moon size={16} color="#C6FF3D" />
+              </div>
+              <div class="theme-meta">
+                <div class="theme-name-row">
+                  <span class="theme-title">Dark Theme</span>
+                  <span class="theme-accent-pill pill-lime">Lime</span>
+                </div>
+                <span class="theme-desc">Obsidian dark with neon lime</span>
+              </div>
+            </div>
+            {#if $currentTheme === 'dark'}
+              <Check size={18} color="var(--accent-lime)" strokeWidth={2.4} />
+            {/if}
+          </div>
+
+          <div
+            class="theme-card"
+            class:selected={$currentTheme === 'light'}
+            onclick={() => setTheme('light')}
+            role="button"
+            tabindex="0"
+            onkeydown={(e) => e.key === 'Enter' && setTheme('light')}
+          >
+            <div class="theme-card-left">
+              <div class="theme-icon light-theme-icon">
+                <Sun size={16} color="#FF6600" />
+              </div>
+              <div class="theme-meta">
+                <div class="theme-name-row">
+                  <span class="theme-title">Light Theme</span>
+                  <span class="theme-accent-pill pill-orange">Orange</span>
+                </div>
+                <span class="theme-desc">Clean light studio with warm orange</span>
+              </div>
+            </div>
+            {#if $currentTheme === 'light'}
+              <Check size={18} color="var(--accent-lime)" strokeWidth={2.4} />
+            {/if}
+          </div>
+        </div>
+      </section>
+
       <!-- Input Devices Section -->
       <section class="settings-section">
         <div class="section-label">Microphone Input</div>
@@ -144,7 +201,7 @@
   .drawer-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.65);
+    background: var(--modal-backdrop);
     backdrop-filter: blur(8px);
     z-index: 150;
     display: flex;
@@ -155,14 +212,15 @@
   .drawer-content {
     width: min(440px, 100vw);
     height: 100%;
-    background: #16161A;
-    border-left: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: -10px 0 40px rgba(0, 0, 0, 0.6);
+    background: var(--bg-modal);
+    border-left: 1px solid var(--border-subtle);
+    box-shadow: var(--shadow-floating);
     display: flex;
     flex-direction: column;
     padding: clamp(16px, 3vh, 28px) clamp(16px, 3vw, 24px);
     box-sizing: border-box;
     animation: slideIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+    color: var(--text-main);
   }
 
   .drawer-header {
@@ -171,7 +229,7 @@
     justify-content: space-between;
     margin-bottom: 24px;
     padding-bottom: 16px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid var(--border-subtle);
   }
 
   .header-title {
@@ -184,24 +242,25 @@
     font-family: var(--font-brand);
     font-size: 20px;
     font-weight: 700;
-    color: #FFFFFF;
+    color: var(--text-main);
   }
 
   .close-btn {
     background: transparent;
     border: none;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--text-muted);
     cursor: pointer;
     padding: 6px;
     border-radius: 6px;
     display: flex;
     align-items: center;
     justify-content: center;
+    transition: all 0.15s ease;
   }
 
   .close-btn:hover {
-    color: #FFFFFF;
-    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-main);
+    background: var(--bg-card-hover);
   }
 
   .drawer-body {
@@ -218,11 +277,112 @@
   }
 
   .section-label {
-    font-size: 13px;
+    font-size: 12.5px;
     font-weight: 600;
     color: var(--text-muted);
     text-transform: uppercase;
+    letter-spacing: 0.6px;
+  }
+
+  /* Theme selection styling */
+  .theme-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .theme-card {
+    background: var(--bg-surface-sunken);
+    border: 1px solid var(--border-subtle);
+    border-radius: 12px;
+    padding: 12px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    transition: all 0.16s ease;
+  }
+
+  .theme-card:hover {
+    border-color: var(--border-medium);
+    background: var(--bg-card-hover);
+  }
+
+  .theme-card.selected {
+    border-color: var(--accent-lime);
+    background: var(--accent-lime-dim);
+  }
+
+  .theme-card-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .theme-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .dark-theme-icon {
+    background: #0B0B0D;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .light-theme-icon {
+    background: #FFFFFF;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  }
+
+  .theme-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .theme-name-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .theme-title {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--text-main);
+  }
+
+  .theme-accent-pill {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 9999px;
+    text-transform: uppercase;
     letter-spacing: 0.5px;
+  }
+
+  .pill-lime {
+    background: rgba(198, 255, 61, 0.2);
+    color: #9ECE10;
+  }
+
+  :global([data-theme="dark"]) .pill-lime {
+    color: #C6FF3D;
+  }
+
+  .pill-orange {
+    background: rgba(255, 102, 0, 0.18);
+    color: #FF6600;
+  }
+
+  .theme-desc {
+    font-size: 12px;
+    color: var(--text-muted);
   }
 
   .devices-list {
@@ -232,8 +392,8 @@
   }
 
   .device-option {
-    background: #0B0B0D;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--bg-surface-sunken);
+    border: 1px solid var(--border-subtle);
     border-radius: 12px;
     padding: 12px 14px;
     display: flex;
@@ -244,12 +404,13 @@
   }
 
   .device-option:hover {
-    border-color: rgba(255, 255, 255, 0.2);
+    border-color: var(--border-medium);
+    background: var(--bg-card-hover);
   }
 
   .device-option.selected {
     border-color: var(--accent-lime);
-    background: rgba(198, 255, 61, 0.04);
+    background: var(--accent-lime-dim);
   }
 
   .device-info {
@@ -261,12 +422,13 @@
   .device-name {
     font-size: 13.5px;
     font-weight: 500;
-    color: #FFFFFF;
+    color: var(--text-main);
   }
 
   .default-badge {
     font-size: 11px;
     color: var(--accent-lime);
+    font-weight: 600;
   }
 
   .specs-grid {
@@ -276,8 +438,8 @@
   }
 
   .spec-card {
-    background: #0B0B0D;
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: var(--bg-surface-sunken);
+    border: 1px solid var(--border-subtle);
     border-radius: 10px;
     padding: 10px 12px;
     display: flex;
@@ -293,11 +455,11 @@
   .spec-value {
     font-size: 12.5px;
     font-weight: 600;
-    color: #FFFFFF;
+    color: var(--text-main);
   }
 
   .import-dropzone {
-    border: 2px dashed rgba(255, 255, 255, 0.15);
+    border: 2px dashed var(--border-medium);
     border-radius: 14px;
     padding: 24px;
     display: flex;
@@ -305,18 +467,19 @@
     align-items: center;
     gap: 8px;
     cursor: pointer;
+    background: var(--bg-surface-sunken);
     transition: all 0.18s ease;
   }
 
   .import-dropzone:hover {
     border-color: var(--accent-lime);
-    background: rgba(198, 255, 61, 0.03);
+    background: var(--accent-lime-dim);
   }
 
   .dropzone-text {
     font-size: 13px;
     font-weight: 500;
-    color: #FFFFFF;
+    color: var(--text-main);
   }
 
   .dropzone-sub {

@@ -168,7 +168,7 @@
 
     <!-- Settings Button (matching panel-1.png squircle style) -->
     <button class="btn-nav" onclick={onOpenSettings}>
-      <Settings size={18} color="rgba(255,255,255,0.9)" />
+      <Settings size={18} color="var(--text-main)" />
       <span>Settings</span>
     </button>
   </header>
@@ -210,9 +210,9 @@
     </div>
 
     <div class="footer-right">
-      <!-- Recordings List Button with Lime Green List Icon matching panel-1.png -->
+      <!-- Recordings List Button with Accent List Icon -->
       <button class="btn-nav" onclick={onNavigateRecordings}>
-        <List size={18} color="#C6FF3D" strokeWidth={2.4} />
+        <List size={18} color="var(--accent-lime)" strokeWidth={2.4} />
         <span>Recordings List</span>
       </button>
     </div>
@@ -284,13 +284,13 @@
     font-family: var(--font-brand);
     font-size: 24px;
     font-weight: 700;
-    color: #FFFFFF;
+    color: var(--text-main);
     letter-spacing: -0.5px;
   }
 
   .brand-subtitle {
     font-size: 13.5px;
-    color: rgba(255, 255, 255, 0.45);
+    color: var(--text-muted);
     font-weight: 400;
   }
 
@@ -299,20 +299,21 @@
     display: inline-flex;
     align-items: center;
     gap: 9px;
-    background: #141417;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    color: #FFFFFF;
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-main);
     padding: 9px 18px;
     border-radius: 14px;
     font-size: 13.5px;
     font-weight: 500;
     cursor: pointer;
+    box-shadow: var(--shadow-card);
     transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .btn-nav:hover {
-    background: #1B1B1F;
-    border-color: rgba(255, 255, 255, 0.15);
+    background: var(--bg-card-hover);
+    border-color: var(--border-medium);
     transform: translateY(-1px);
   }
 
@@ -339,7 +340,7 @@
     font-family: var(--font-brand);
     font-size: 80px;
     font-weight: 700;
-    color: #FFFFFF;
+    color: var(--text-main);
     letter-spacing: -1.5px;
     line-height: 1;
     margin: 2px 0 10px 0;
