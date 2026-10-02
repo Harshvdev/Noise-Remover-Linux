@@ -92,22 +92,38 @@
             isCleanAudio = status.is_clean;
           }
 
+          // Ensure duration matches actual hardware audio buffer duration
+          if (status.duration_seconds > 0 && track) {
+            if (!track.duration_secs || Math.abs(track.duration_secs - status.duration_seconds) > 0.05) {
+              track.duration_secs = status.duration_seconds;
+            }
+          }
+
           if (pendingSeekExpires > Date.now()) {
             const diff = Math.abs(status.position_seconds - currentPosSecs);
             if (diff <= 0.75) {
               pendingSeekExpires = 0;
               currentPosSecs = status.position_seconds;
+              lastFrameTime = performance.now();
             }
           } else {
-            if (!isPlaying || Math.abs(status.position_seconds - currentPosSecs) > 0.25) {
+            if (!isPlaying) {
               currentPosSecs = status.position_seconds;
+              lastFrameTime = performance.now();
+            } else {
+              const diff = Math.abs(status.position_seconds - currentPosSecs);
+              // Tightly lock frontend needle to hardware audio position to prevent timing drift
+              if (diff > 0.04) {
+                currentPosSecs = status.position_seconds;
+                lastFrameTime = performance.now();
+              }
             }
           }
         }
       } catch (e) {
         // Ignore fallback
       }
-    }, 100);
+    }, 50);
   });
 
   onDestroy(() => {
@@ -754,13 +770,16 @@
   .enhance-bars-icon.active .eb4 { height: 17px; }
   .enhance-bars-icon.active .eb5 { height: 9px; }
 
-  /* Compact scalable toggle switch */
+  /* Compact scalable toggle switch with flexbox vertical centering */
   .toggle-switch {
-    width: 40px;
-    height: 23px;
+    width: 42px;
+    height: 24px;
     border-radius: 9999px;
     background-color: rgba(255, 255, 255, 0.16);
-    position: relative;
+    display: flex;
+    align-items: center;
+    padding: 0 3px;
+    box-sizing: border-box;
     cursor: pointer;
     transition: background-color 0.28s cubic-bezier(0.16, 1, 0.3, 1),
                 box-shadow 0.28s ease;
@@ -769,13 +788,11 @@
   }
 
   .toggle-knob {
-    width: 17px;
-    height: 17px;
+    width: 18px;
+    height: 18px;
     border-radius: 50%;
     background-color: #FFFFFF;
-    position: absolute;
-    top: 3px;
-    left: 3px;
+    flex-shrink: 0;
     transform: translateX(0);
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
     transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1),
@@ -789,7 +806,7 @@
   }
 
   .toggle-switch.active .toggle-knob {
-    transform: translateX(17px);
+    transform: translateX(18px);
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
   }
 
@@ -853,15 +870,16 @@
       height: 21px !important;
     }
     .toggle-switch {
-      width: 34px;
+      width: 36px;
       height: 20px;
+      padding: 0 3px;
     }
     .toggle-knob {
       width: 14px;
       height: 14px;
     }
     .toggle-switch.active .toggle-knob {
-      transform: translateX(14px);
+      transform: translateX(16px);
     }
   }
 
@@ -891,17 +909,16 @@
       height: 19px !important;
     }
     .toggle-switch {
-      width: 28px;
-      height: 17px;
+      width: 30px;
+      height: 18px;
+      padding: 0 2.5px;
     }
     .toggle-knob {
-      width: 12px;
-      height: 12px;
-      top: 2.5px;
-      left: 2.5px;
+      width: 13px;
+      height: 13px;
     }
     .toggle-switch.active .toggle-knob {
-      transform: translateX(11px);
+      transform: translateX(12px);
     }
   }
 
@@ -928,14 +945,13 @@
       height: 17px !important;
     }
     .toggle-switch {
-      width: 24px;
-      height: 14px;
+      width: 25px;
+      height: 15px;
+      padding: 0 2px;
     }
     .toggle-knob {
-      width: 10px;
-      height: 10px;
-      top: 2px;
-      left: 2px;
+      width: 11px;
+      height: 11px;
     }
     .toggle-switch.active .toggle-knob {
       transform: translateX(10px);

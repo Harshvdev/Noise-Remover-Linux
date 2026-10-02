@@ -177,12 +177,13 @@
 
       for (let i = 0; i < barCount; i++) {
         const x = i * barSpacing + barSpacing / 2;
-        const normIdxClean = Math.floor((i / barCount) * activeClean.length);
-        const normIdxRaw = Math.floor((i / barCount) * activeRaw.length);
+        const sampleProgress = (i + 0.5) / barCount;
+        const normIdxClean = Math.min(activeClean.length - 1, Math.floor(sampleProgress * activeClean.length));
+        const normIdxRaw = Math.min(activeRaw.length - 1, Math.floor(sampleProgress * activeRaw.length));
         const peakClean = activeClean[normIdxClean] || 0.28;
         const peakRaw = activeRaw[normIdxRaw] || peakClean;
         const peak = peakClean * t + peakRaw * (1 - t);
-        const h = Math.max(6, peak * (height * 0.78));
+        const h = Math.max(6, peak * (height * 0.68));
 
         ctx.beginPath();
         ctx.roundRect(x - barWidth / 2, centerY - h / 2, barWidth, h, 9999);
@@ -292,45 +293,46 @@
 <svelte:window onkeydown={handleKeyDown} />
 
 <div class="split-scrubber-widget">
-  <!-- Waveform Stage (Interactive Canvas + Synchronized Pin + Centered Hover Play Button) -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div
-    class="waveform-stage"
-    bind:this={container}
-    onmousedown={handleWaveformMouseDown}
-    onmousemove={handleStageMouseMove}
-    onmouseleave={handleStageMouseLeave}
-  >
-    <canvas bind:this={canvas}></canvas>
-
-    <!-- Synchronized Playhead Pin that moves with playback & bottom audio bar -->
+  <!-- Waveform Container (Matches 64px inset of bottom scrubber track for 1:1 timeline alignment) -->
+  <div class="waveform-container">
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="playhead-pin"
-      class:clean-pin={isCleanAudio}
-      style="left: {playheadRatio * 100}%;"
+      class="waveform-stage"
+      bind:this={container}
+      onmousedown={handleWaveformMouseDown}
+      onmousemove={handleStageMouseMove}
+      onmouseleave={handleStageMouseLeave}
     >
-      <div class="pin-line"></div>
-    </div>
+      <canvas bind:this={canvas}></canvas>
 
-    <!-- Centered Play/Pause Button (auto-fades when playing, reappears on hover) -->
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <button
-      class="center-play-btn"
-      class:visible={showControls}
-      onclick={(e) => {
-        e.stopPropagation();
-        onPlayToggle();
-        scheduleHideControls();
-      }}
-      title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
-      aria-label={isPlaying ? 'Pause' : 'Play'}
-    >
-      {#if isPlaying}
-        <Pause size={22} fill="#000000" color="#000000" />
-      {:else}
-        <Play size={22} fill="#000000" color="#000000" style="margin-left: 2px;" />
-      {/if}
-    </button>
+      <!-- Synchronized Playhead Pin contained strictly inside the lime waveform bars with high-visibility white contrast -->
+      <div
+        class="playhead-pin"
+        style="left: {playheadRatio * 100}%;"
+      >
+        <div class="pin-line"></div>
+      </div>
+
+      <!-- Centered Play/Pause Button (auto-fades when playing, reappears on hover) -->
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <button
+        class="center-play-btn"
+        class:visible={showControls}
+        onclick={(e) => {
+          e.stopPropagation();
+          onPlayToggle();
+          scheduleHideControls();
+        }}
+        title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
+        aria-label={isPlaying ? 'Pause' : 'Play'}
+      >
+        {#if isPlaying}
+          <Pause size={22} fill="#000000" color="#000000" />
+        {:else}
+          <Play size={22} fill="#000000" color="#000000" style="margin-left: 2px;" />
+        {/if}
+      </button>
+    </div>
   </div>
 
   <!-- Bottom Timeline Scrubber Row -->
@@ -372,14 +374,23 @@
     max-width: 1000px;
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: clamp(60px, 9vh, 96px);
     align-items: center;
     box-sizing: border-box;
   }
 
+  /* Waveform container with exact 64px padding to align with scrubber track between time labels */
+  .waveform-container {
+    width: 100%;
+    padding: 0 64px;
+    box-sizing: border-box;
+    display: flex;
+    justify-content: center;
+  }
+
   .waveform-stage {
     width: 100%;
-    height: clamp(190px, 30vh, 290px);
+    height: clamp(170px, 26vh, 250px);
     position: relative;
     cursor: pointer;
     display: flex;
@@ -395,29 +406,24 @@
     pointer-events: none;
   }
 
-  /* Synchronized vertical needle pin */
+  /* Synchronized vertical needle pin contained inside waveform bars */
   .playhead-pin {
     position: absolute;
-    top: 0;
-    bottom: 0;
-    width: 2px;
+    top: 16%;
+    bottom: 16%;
+    width: 2.5px;
     pointer-events: none;
     transform: translateX(-50%);
     z-index: 8;
   }
 
+  /* Distinct high-contrast needle with crisp outline so it is clearly visible over lime bars */
   .playhead-pin .pin-line {
     width: 100%;
     height: 100%;
     background-color: #FFFFFF;
-    box-shadow: 0 0 8px rgba(255, 255, 255, 0.5);
+    box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.85), 0 0 8px rgba(255, 255, 255, 0.95);
     border-radius: 9999px;
-    transition: background-color 0.3s ease, box-shadow 0.3s ease;
-  }
-
-  .playhead-pin.clean-pin .pin-line {
-    background-color: var(--accent-lime);
-    box-shadow: 0 0 10px var(--accent-lime-glow);
   }
 
   /* Centered floating play/pause button */
@@ -533,10 +539,32 @@
 
   @media (max-height: 720px) {
     .split-scrubber-widget {
-      gap: 12px;
+      gap: clamp(48px, 7.5vh, 68px);
     }
     .waveform-stage {
-      height: clamp(150px, 25vh, 200px);
+      height: clamp(130px, 20vh, 160px);
+    }
+  }
+
+  @media (max-height: 560px) {
+    .split-scrubber-widget {
+      gap: 36px;
+    }
+    .waveform-stage {
+      height: 110px;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .waveform-container {
+      padding: 0 52px;
+    }
+    .timeline-row {
+      gap: 10px;
+    }
+    .time-label {
+      width: 42px;
+      font-size: 12px;
     }
   }
 </style>
