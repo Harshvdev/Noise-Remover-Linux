@@ -63,12 +63,15 @@
     }
   }
 
+  let isDragging = false;
+  let wasPlayingBeforeDrag = false;
+
   function updatePlayhead() {
     const now = performance.now();
     const dt = (now - lastFrameTime) / 1000;
     lastFrameTime = now;
 
-    if (isPlaying && track && track.duration_secs > 0) {
+    if (!isDragging && isPlaying && track && track.duration_secs > 0) {
       currentPosSecs = Math.min(track.duration_secs, currentPosSecs + dt);
       if (currentPosSecs >= track.duration_secs) {
         isPlaying = false;
@@ -84,8 +87,10 @@
     animFrameId = requestAnimationFrame(updatePlayhead);
 
     statusPollInterval = setInterval(async () => {
+      if (isDragging) return;
       try {
         const status = await api.getPlaybackStatus();
+        if (isDragging) return;
         if (status.track_id === trackId) {
           isPlaying = status.is_playing;
           if (pendingEnhanceExpires <= Date.now()) {
@@ -132,7 +137,7 @@
   });
 
   async function handlePlayToggle() {
-    if (!track) return;
+    if (!track || isDragging) return;
     if (isPlaying) {
       await api.pauseTrack();
       isPlaying = false;
@@ -143,15 +148,46 @@
     }
   }
 
-  async function handleSeek(sec: number) {
+  async function handleSeekStart(sec: number) {
+    isDragging = true;
+    wasPlayingBeforeDrag = isPlaying;
+    isPlaying = false;
+    try {
+      await api.pauseTrack();
+    } catch (e) {
+      console.warn('Pause error on seek start:', e);
+    }
     currentPosSecs = sec;
     lastFrameTime = performance.now();
-    pendingSeekExpires = Date.now() + 800;
+  }
+
+  function handleSeekMove(sec: number) {
+    currentPosSecs = sec;
+    lastFrameTime = performance.now();
+  }
+
+  async function handleSeekEnd(sec: number) {
+    currentPosSecs = sec;
+    lastFrameTime = performance.now();
+    pendingSeekExpires = Date.now() + 1000;
     try {
       await api.seekTrack(sec);
+      // If was playing before user grabbed the pin, resume playback from the released point
+      if (wasPlayingBeforeDrag && track) {
+        lastFrameTime = performance.now();
+        await api.playTrack(track.id, isCleanAudio, sec);
+        isPlaying = true;
+      }
     } catch (e) {
       console.warn('Seek error:', e);
+    } finally {
+      isDragging = false;
+      wasPlayingBeforeDrag = false;
     }
+  }
+
+  async function handleSeek(sec: number) {
+    await handleSeekEnd(sec);
   }
 
   // Seamless real-time A/B audio toggle
@@ -268,10 +304,14 @@
           cleanWaveform={track?.clean_waveform || []}
           rawWaveform={track?.raw_waveform || []}
           durationSecs={track?.duration_secs || 134}
+          bind:isDragging
           {currentPosSecs}
           {isPlaying}
           {isCleanAudio}
           onPlayToggle={handlePlayToggle}
+          onSeekStart={handleSeekStart}
+          onSeekMove={handleSeekMove}
+          onSeekEnd={handleSeekEnd}
           onSeek={handleSeek}
         />
       </div>

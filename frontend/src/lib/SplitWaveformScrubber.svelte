@@ -9,6 +9,9 @@
   export let isPlaying = false;
   export let isCleanAudio = true;
   export let onPlayToggle: () => void;
+  export let onSeekStart: ((sec: number) => void) | undefined = undefined;
+  export let onSeekMove: ((sec: number) => void) | undefined = undefined;
+  export let onSeekEnd: ((sec: number) => void) | undefined = undefined;
   export let onSeek: (sec: number) => void;
 
   let canvas: HTMLCanvasElement;
@@ -20,8 +23,9 @@
   // Floating play/pause button auto-hide state
   let showControls = true;
   let hideTimeout: ReturnType<typeof setTimeout> | null = null;
-  let isDraggingScrubber = false;
-  let isDraggingWaveform = false;
+  export let isDragging = false;
+  let dragPosSecs = 0;
+  let activePointerCleanup: (() => void) | null = null;
 
   // Smooth enhance A/B cross-fade transition state
   let enhanceProgress = isCleanAudio ? 1.0 : 0.0;
@@ -62,7 +66,8 @@
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   }
 
-  $: playheadRatio = durationSecs > 0 ? Math.min(1, Math.max(0, currentPosSecs / durationSecs)) : 0;
+  $: activePosSecs = isDragging ? dragPosSecs : currentPosSecs;
+  $: playheadRatio = durationSecs > 0 ? Math.min(1, Math.max(0, activePosSecs / durationSecs)) : 0;
 
   function scheduleHideControls() {
     if (hideTimeout) clearTimeout(hideTimeout);
@@ -79,7 +84,7 @@
   }
 
   function handleStageMouseLeave() {
-    if (isPlaying && !isDraggingWaveform) {
+    if (isPlaying && !isDragging) {
       showControls = false;
     }
   }
@@ -205,76 +210,197 @@
   });
 
   onDestroy(() => {
+    if (activePointerCleanup) {
+      activePointerCleanup();
+      activePointerCleanup = null;
+    }
     if (animId) cancelAnimationFrame(animId);
     if (hideTimeout) clearTimeout(hideTimeout);
     if (resizeObserver) resizeObserver.disconnect();
   });
 
-  // Direct waveform seek & drag
-  function seekWaveformByClientX(clientX: number) {
-    if (!container || durationSecs <= 0) return;
-    const rect = container.getBoundingClientRect();
+  function getRatioByClientX(clientX: number, isTimeline = false): number {
+    const el = isTimeline ? scrubberTrackEl : container;
+    if (!el) return 0;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0) return 0;
     const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
-    const ratio = rect.width > 0 ? x / rect.width : 0;
-    onSeek(ratio * durationSecs);
+    return x / rect.width;
   }
 
-  function handleWaveformMouseDown(e: MouseEvent) {
-    if (e.button !== 0) return;
-    // If clicked directly on the play button, don't seek
-    if ((e.target as HTMLElement).closest('.center-play-btn')) return;
+  function startDrag(
+    clientX: number,
+    isTimeline = false,
+    pointerId?: number,
+    targetEl?: HTMLElement,
+    isDirectPinGrab = false
+  ) {
+    if (durationSecs <= 0) return;
 
-    isDraggingWaveform = true;
+    if (activePointerCleanup) {
+      activePointerCleanup();
+      activePointerCleanup = null;
+    }
+
+    isDragging = true;
     scheduleHideControls();
-    seekWaveformByClientX(e.clientX);
 
-    const onMouseMove = (ev: MouseEvent) => {
-      if (!isDraggingWaveform) return;
-      seekWaveformByClientX(ev.clientX);
+    // When directly clicking the needle, maintain its current position rather than jumping
+    if (isDirectPinGrab) {
+      dragPosSecs = currentPosSecs;
+    } else {
+      const ratio = getRatioByClientX(clientX, isTimeline);
+      dragPosSecs = ratio * durationSecs;
+    }
+
+    if (onSeekStart) {
+      onSeekStart(dragPosSecs);
+    } else {
+      onSeek(dragPosSecs);
+    }
+
+    const onPointerMove = (ev: PointerEvent) => {
+      if (!isDragging) return;
+      if (pointerId !== undefined && ev.pointerId !== pointerId) return;
+      ev.preventDefault();
+
+      const moveRatio = getRatioByClientX(ev.clientX, isTimeline);
+      dragPosSecs = moveRatio * durationSecs;
+
+      if (onSeekMove) {
+        onSeekMove(dragPosSecs);
+      } else {
+        onSeek(dragPosSecs);
+      }
     };
 
-    const onMouseUp = () => {
-      isDraggingWaveform = false;
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
+    const cleanup = () => {
+      window.removeEventListener('pointermove', onPointerMove, true);
+      window.removeEventListener('pointerup', onPointerUp, true);
+      window.removeEventListener('pointercancel', onPointerCancel, true);
+      window.removeEventListener('mousemove', onMouseMoveLegacy, true);
+      window.removeEventListener('mouseup', onMouseUpLegacy, true);
+
+      if (targetEl && pointerId !== undefined) {
+        try {
+          if (targetEl.hasPointerCapture(pointerId)) {
+            targetEl.releasePointerCapture(pointerId);
+          }
+        } catch (_) {}
+      }
+      activePointerCleanup = null;
     };
 
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
+    const onPointerUp = (ev: PointerEvent) => {
+      if (!isDragging) return;
+      if (pointerId !== undefined && ev.pointerId !== pointerId) return;
+      ev.preventDefault();
+      cleanup();
+
+      isDragging = false;
+      const endRatio = getRatioByClientX(ev.clientX, isTimeline);
+      const finalSec = endRatio * durationSecs;
+      dragPosSecs = finalSec;
+
+      if (onSeekEnd) {
+        onSeekEnd(finalSec);
+      } else {
+        onSeek(finalSec);
+      }
+    };
+
+    const onPointerCancel = (ev: PointerEvent) => {
+      if (!isDragging) return;
+      if (pointerId !== undefined && ev.pointerId !== pointerId) return;
+      cleanup();
+
+      isDragging = false;
+      if (onSeekEnd) {
+        onSeekEnd(dragPosSecs);
+      } else {
+        onSeek(dragPosSecs);
+      }
+    };
+
+    const onMouseMoveLegacy = (ev: MouseEvent) => {
+      if (!isDragging) return;
+      ev.preventDefault();
+      const moveRatio = getRatioByClientX(ev.clientX, isTimeline);
+      dragPosSecs = moveRatio * durationSecs;
+
+      if (onSeekMove) {
+        onSeekMove(dragPosSecs);
+      } else {
+        onSeek(dragPosSecs);
+      }
+    };
+
+    const onMouseUpLegacy = (ev: MouseEvent) => {
+      if (!isDragging) return;
+      cleanup();
+
+      isDragging = false;
+      const endRatio = getRatioByClientX(ev.clientX, isTimeline);
+      const finalSec = endRatio * durationSecs;
+      dragPosSecs = finalSec;
+
+      if (onSeekEnd) {
+        onSeekEnd(finalSec);
+      } else {
+        onSeek(finalSec);
+      }
+    };
+
+    activePointerCleanup = cleanup;
+
+    window.addEventListener('pointermove', onPointerMove, true);
+    window.addEventListener('pointerup', onPointerUp, true);
+    window.addEventListener('pointercancel', onPointerCancel, true);
+    window.addEventListener('mousemove', onMouseMoveLegacy, true);
+    window.addEventListener('mouseup', onMouseUpLegacy, true);
   }
 
-  // Handle timeline scrubber bar click & drag
-  function seekTimelineByClientX(clientX: number) {
-    if (!scrubberTrackEl || durationSecs <= 0) return;
-    const rect = scrubberTrackEl.getBoundingClientRect();
-    const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
-    const ratio = rect.width > 0 ? x / rect.width : 0;
-    onSeek(ratio * durationSecs);
+  function handleWaveformPointerDown(e: PointerEvent) {
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest('.center-play-btn')) return;
+    e.preventDefault();
+
+    const target = e.currentTarget as HTMLElement;
+    try {
+      target.setPointerCapture(e.pointerId);
+    } catch (_) {}
+
+    startDrag(e.clientX, false, e.pointerId, target, false);
   }
 
-  function handleTimelineMouseDown(e: MouseEvent) {
+  function handlePinPointerDown(e: PointerEvent) {
     if (e.button !== 0) return;
     e.stopPropagation();
-    isDraggingScrubber = true;
-    scheduleHideControls();
-    seekTimelineByClientX(e.clientX);
+    e.preventDefault();
 
-    const onMouseMove = (moveEv: MouseEvent) => {
-      if (!isDraggingScrubber) return;
-      seekTimelineByClientX(moveEv.clientX);
-    };
+    const target = e.currentTarget as HTMLElement;
+    try {
+      target.setPointerCapture(e.pointerId);
+    } catch (_) {}
 
-    const onMouseUp = () => {
-      isDraggingScrubber = false;
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-    };
+    startDrag(e.clientX, false, e.pointerId, target, true);
+  }
 
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
+  function handleTimelinePointerDown(e: PointerEvent) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.preventDefault();
+
+    const target = e.currentTarget as HTMLElement;
+    try {
+      target.setPointerCapture(e.pointerId);
+    } catch (_) {}
+
+    startDrag(e.clientX, true, e.pointerId, target, false);
   }
 
   function handleKeyDown(e: KeyboardEvent) {
+    if (isDragging) return;
     if (e.key === ' ' || e.code === 'Space') {
       if (
         e.target instanceof HTMLInputElement ||
@@ -299,16 +425,23 @@
     <div
       class="waveform-stage"
       bind:this={container}
-      onmousedown={handleWaveformMouseDown}
+      onpointerdown={handleWaveformPointerDown}
       onmousemove={handleStageMouseMove}
       onmouseleave={handleStageMouseLeave}
+      onmousedown={(e) => e.preventDefault()}
+      draggable="false"
     >
       <canvas bind:this={canvas}></canvas>
 
       <!-- Synchronized Playhead Pin contained strictly inside the lime waveform bars with high-visibility white contrast -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
         class="playhead-pin"
+        class:is-dragging={isDragging}
         style="left: {playheadRatio * 100}%;"
+        onpointerdown={handlePinPointerDown}
+        onmousedown={(e) => e.preventDefault()}
+        draggable="false"
       >
         <div class="pin-line"></div>
       </div>
@@ -318,6 +451,8 @@
       <button
         class="center-play-btn"
         class:visible={showControls}
+        class:is-scrubbing={isDragging}
+        onpointerdown={(e) => e.stopPropagation()}
         onclick={(e) => {
           e.stopPropagation();
           onPlayToggle();
@@ -337,16 +472,18 @@
 
   <!-- Bottom Timeline Scrubber Row -->
   <div class="timeline-row">
-    <span class="time-label time-current tabular-nums">{formatTime(currentPosSecs)}</span>
+    <span class="time-label time-current tabular-nums">{formatTime(activePosSecs)}</span>
 
     <!-- Interactive Scrubber Bar -->
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
       class="scrubber-track"
       bind:this={scrubberTrackEl}
-      onmousedown={handleTimelineMouseDown}
+      onpointerdown={handleTimelinePointerDown}
+      onmousedown={(e) => e.preventDefault()}
+      draggable="false"
       role="slider"
-      aria-valuenow={currentPosSecs}
+      aria-valuenow={activePosSecs}
       aria-valuemin={0}
       aria-valuemax={durationSecs}
       tabindex="0"
@@ -359,7 +496,7 @@
       <div
         class="scrubber-thumb"
         class:clean-thumb={isCleanAudio}
-        class:is-active-drag={isDraggingScrubber}
+        class:is-active-drag={isDragging}
         style="left: {playheadRatio * 100}%;"
       ></div>
     </div>
@@ -397,6 +534,10 @@
     align-items: center;
     justify-content: center;
     box-sizing: border-box;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-drag: none;
+    touch-action: none;
   }
 
   canvas {
@@ -404,6 +545,8 @@
     height: 100%;
     display: block;
     pointer-events: none;
+    user-select: none;
+    -webkit-user-select: none;
   }
 
   /* Synchronized vertical needle pin contained inside waveform bars */
@@ -412,9 +555,34 @@
     top: 16%;
     bottom: 16%;
     width: 2.5px;
-    pointer-events: none;
+    pointer-events: auto;
+    cursor: grab;
     transform: translateX(-50%);
-    z-index: 8;
+    z-index: 25;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-drag: none;
+    touch-action: none;
+  }
+
+  /* Generous invisible grab hit-area so users can easily click and drag the pin directly */
+  .playhead-pin::before {
+    content: '';
+    position: absolute;
+    top: -12px;
+    bottom: -12px;
+    left: -16px;
+    right: -16px;
+    cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-drag: none;
+    touch-action: none;
+  }
+
+  .playhead-pin.is-dragging,
+  .playhead-pin.is-dragging::before {
+    cursor: grabbing;
   }
 
   /* Distinct high-contrast needle with crisp outline so it is clearly visible over lime bars */
@@ -445,6 +613,8 @@
     z-index: 15;
     opacity: 0;
     pointer-events: none;
+    user-select: none;
+    -webkit-user-select: none;
     transition: opacity 0.24s cubic-bezier(0.16, 1, 0.3, 1),
       transform 0.24s cubic-bezier(0.16, 1, 0.3, 1),
       background-color 0.15s ease;
@@ -454,6 +624,10 @@
     opacity: 1;
     pointer-events: auto;
     transform: translate(-50%, -50%) scale(1);
+  }
+
+  .center-play-btn.is-scrubbing {
+    pointer-events: none !important;
   }
 
   .center-play-btn:hover {
@@ -473,6 +647,8 @@
     align-items: center;
     gap: 16px;
     box-sizing: border-box;
+    user-select: none;
+    -webkit-user-select: none;
   }
 
   .time-label {
@@ -481,6 +657,8 @@
     font-weight: 600;
     width: 48px;
     flex-shrink: 0;
+    user-select: none;
+    -webkit-user-select: none;
   }
 
   .time-current {
@@ -500,6 +678,10 @@
     cursor: pointer;
     display: flex;
     align-items: center;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-drag: none;
+    touch-action: none;
   }
 
   .scrubber-fill {
