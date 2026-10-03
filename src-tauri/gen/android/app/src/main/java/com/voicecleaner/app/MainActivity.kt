@@ -52,10 +52,30 @@ class MainActivity : TauriActivity() {
     controller.isAppearanceLightStatusBars = true
     controller.isAppearanceLightNavigationBars = true
 
+    volumeControlStream = android.media.AudioManager.STREAM_MUSIC
+    AudioDeviceHelper.init(this)
+
+    val permissionsToRequest = mutableListOf<String>()
     if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-      ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 1001)
+      permissionsToRequest.add(Manifest.permission.RECORD_AUDIO)
+    }
+    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+      if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+        permissionsToRequest.add(Manifest.permission.BLUETOOTH_CONNECT)
+      }
+    }
+    if (permissionsToRequest.isNotEmpty()) {
+      ActivityCompat.requestPermissions(this, permissionsToRequest.toTypedArray(), 1001)
     }
   }
+
+  override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+    super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+    if (requestCode == 1001) {
+      AudioDeviceHelper.onPermissionsGranted()
+    }
+  }
+
 
   private fun extractModelIfNeeded(assetPath: String) {
     try {

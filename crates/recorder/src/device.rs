@@ -25,6 +25,16 @@ pub struct PipeWireSourceInfo {
     pub bluetooth_card: Option<String>,
 }
 
+#[cfg(target_os = "android")]
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct AndroidDeviceInfo {
+    pub id: i32,
+    pub name: String,
+    pub tier: i32,
+    pub is_default: bool,
+    pub is_selected: bool,
+}
+
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub enum DeviceTier {
     WiredExternal = 0, // Highest priority: USB mic, external 3.5mm mic, external card
@@ -263,6 +273,124 @@ impl DeviceManager {
                 }
             }
         }
+    }
+
+    /// Query Android sound manager for active input sources (Wired, Bluetooth, Internal) via JNI.
+    #[cfg(target_os = "android")]
+    pub fn get_android_devices() -> Vec<AndroidDeviceInfo> {
+        let ctx = ndk_context::android_context();
+        let vm_ptr = ctx.vm();
+        if vm_ptr.is_null() {
+            log::warn!("Android JavaVM pointer is null in DeviceManager");
+            return Vec::new();
+        }
+        let vm = unsafe { jni::JavaVM::from_raw(vm_ptr as *mut _) };
+        let json_result: Result<String, jni::errors::Error> = vm.attach_current_thread(|env| {
+            let res = env.call_static_method(
+                jni::jni_str!("com/voicecleaner/app/AudioDeviceHelper"),
+                jni::jni_str!("getDevicesJson"),
+                jni::jni_sig!("()Ljava/lang/String;"),
+                &[],
+            )?;
+            let obj = res.l()?;
+            if obj.is_null() {
+                return Ok(String::new());
+            }
+            let jstr = unsafe { jni::objects::JString::from_raw(env, obj.into_raw()) };
+            let rust_str: String = env.get_string(&jstr)?.into();
+            Ok(rust_str)
+        });
+
+        match json_result {
+            Ok(json_str) => serde_json::from_str(&json_str).unwrap_or_default(),
+            Err(e) => {
+                log::warn!("Failed to call AudioDeviceHelper.getDevicesJson(): {:?}", e);
+                Vec::new()
+            }
+        }
+    }
+
+    /// Select an audio input device on Android by its AudioDeviceInfo ID.
+    #[cfg(target_os = "android")]
+    pub fn select_android_device(id: i32) -> bool {
+        let ctx = ndk_context::android_context();
+        let vm_ptr = ctx.vm();
+        if vm_ptr.is_null() {
+            return false;
+        }
+        let vm = unsafe { jni::JavaVM::from_raw(vm_ptr as *mut _) };
+        let res: Result<bool, jni::errors::Error> = vm.attach_current_thread(|env| {
+            let val = jni::objects::JValue::from(id);
+            let res = env.call_static_method(
+                jni::jni_str!("com/voicecleaner/app/AudioDeviceHelper"),
+                jni::jni_str!("selectDevice"),
+                jni::jni_sig!("(I)Z"),
+                &[val],
+            )?;
+            Ok(res.z().unwrap_or(false))
+        });
+        res.unwrap_or(false)
+    }
+
+    /// Select the highest priority audio input device on Android (Wired > Bluetooth > Internal).
+    #[cfg(target_os = "android")]
+    pub fn select_android_default_device() -> bool {
+        let ctx = ndk_context::android_context();
+        let vm_ptr = ctx.vm();
+        if vm_ptr.is_null() {
+            return false;
+        }
+        let vm = unsafe { jni::JavaVM::from_raw(vm_ptr as *mut _) };
+        let res: Result<bool, jni::errors::Error> = vm.attach_current_thread(|env| {
+            let res = env.call_static_method(
+                jni::jni_str!("com/voicecleaner/app/AudioDeviceHelper"),
+                jni::jni_str!("selectDefaultDevice"),
+                jni::jni_sig!("()Z"),
+                &[],
+            )?;
+            Ok(res.z().unwrap_or(false))
+        });
+        res.unwrap_or(false)
+    }
+
+    /// Notify Android AudioManager when recording or calibration starts.
+    #[cfg(target_os = "android")]
+    pub fn notify_android_recording_started() {
+        let ctx = ndk_context::android_context();
+        let vm_ptr = ctx.vm();
+        if vm_ptr.is_null() {
+            return;
+        }
+        let vm = unsafe { jni::JavaVM::from_raw(vm_ptr as *mut _) };
+        let _: Result<(), jni::errors::Error> = vm.attach_current_thread(|env| {
+            env.call_static_method(
+                jni::jni_str!("com/voicecleaner/app/AudioDeviceHelper"),
+                jni::jni_str!("onRecordingStarted"),
+                jni::jni_sig!("()Z"),
+                &[],
+            )?;
+            Ok(())
+        });
+    }
+
+    /// Notify Android AudioManager when recording or calibration stops.
+    #[cfg(target_os = "android")]
+    pub fn notify_android_recording_stopped() {
+        let ctx = ndk_context::android_context();
+        let vm_ptr = ctx.vm();
+        if vm_ptr.is_null() {
+            return;
+        }
+        let vm = unsafe { jni::JavaVM::from_raw(vm_ptr as *mut _) };
+        let _: Result<(), jni::errors::Error> = vm.attach_current_thread(|env| {
+            env.call_static_method(
+                jni::jni_str!("com/voicecleaner/app/AudioDeviceHelper"),
+                jni::jni_str!("onRecordingStopped"),
+                jni::jni_sig!("()Z"),
+                &[],
+            )?;
+            Ok(())
+        });
     }
 
     /// Query Linux sound server (PipeWire / PulseAudio) for active input sources and hardware ports.
@@ -653,6 +781,18 @@ impl DeviceManager {
     /// List cleaned and curated available input devices.
     /// Prefers PipeWire/PulseAudio input sources if available.
     pub fn list_input_devices(&self) -> Result<Vec<(usize, String)>, RecorderError> {
+        #[cfg(target_os = "android")]
+        {
+            let android_devs = Self::get_android_devices();
+            if !android_devs.is_empty() {
+                let mut list = Vec::new();
+                for dev in android_devs {
+                    list.push((dev.id as usize, dev.name));
+                }
+                return Ok(list);
+            }
+        }
+
         let pw_sources = Self::get_pipewire_sources();
         if !pw_sources.is_empty() {
             let mut list = Vec::new();
@@ -718,10 +858,19 @@ impl DeviceManager {
 
     /// Get input device by index.
     pub fn get_input_device(&self, index: usize) -> Result<Device, RecorderError> {
-        let mut devices = self.host.input_devices()?;
-        devices
-            .nth(index)
-            .ok_or(RecorderError::DeviceNotFound(index))
+        #[cfg(target_os = "android")]
+        {
+            let _ = Self::select_android_device(index as i32);
+            return self.default_input_device().ok_or(RecorderError::DeviceNotFound(index));
+        }
+
+        #[cfg(not(target_os = "android"))]
+        {
+            let mut devices = self.host.input_devices()?;
+            devices
+                .nth(index)
+                .ok_or(RecorderError::DeviceNotFound(index))
+        }
     }
 
     /// Get detailed information for a specific input device.
@@ -767,6 +916,51 @@ impl DeviceManager {
             supported_channels: channels,
         })
     }
+}
+
+/// Find optimal input configuration preferring canonical 1-channel mono at 48,000 Hz.
+pub fn find_best_input_config(device: &Device) -> Result<cpal::SupportedStreamConfig, RecorderError> {
+    if let Ok(configs) = device.supported_input_configs() {
+        let configs_vec: Vec<_> = configs.collect();
+
+        // 1. Mono (1 channel) at 48,000 Hz (F32 preferred, then I16, then I32)
+        for fmt in [cpal::SampleFormat::F32, cpal::SampleFormat::I16, cpal::SampleFormat::I32] {
+            if let Some(range) = configs_vec.iter().find(|c| {
+                c.channels() == 1
+                    && c.sample_format() == fmt
+                    && c.min_sample_rate() <= 48000
+                    && c.max_sample_rate() >= 48000
+            }) {
+                return Ok(range.with_sample_rate(48000));
+            }
+        }
+
+        // 2. Mono (1 channel) with standard sample rate
+        for fmt in [cpal::SampleFormat::F32, cpal::SampleFormat::I16, cpal::SampleFormat::I32] {
+            if let Some(range) = configs_vec.iter().find(|c| c.channels() == 1 && c.sample_format() == fmt) {
+                let target_rate = if range.min_sample_rate() <= 48000 && range.max_sample_rate() >= 48000 {
+                    48000
+                } else {
+                    range.max_sample_rate().min(48000).max(range.min_sample_rate())
+                };
+                return Ok(range.with_sample_rate(target_rate));
+            }
+        }
+
+        // 3. Stereo (2 channels) at 48,000 Hz
+        for fmt in [cpal::SampleFormat::F32, cpal::SampleFormat::I16, cpal::SampleFormat::I32] {
+            if let Some(range) = configs_vec.iter().find(|c| {
+                c.channels() == 2
+                    && c.sample_format() == fmt
+                    && c.min_sample_rate() <= 48000
+                    && c.max_sample_rate() >= 48000
+            }) {
+                return Ok(range.with_sample_rate(48000));
+            }
+        }
+    }
+
+    device.default_input_config().map_err(Into::into)
 }
 
 impl Default for DeviceManager {

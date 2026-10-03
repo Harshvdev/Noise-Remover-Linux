@@ -265,6 +265,7 @@ export const api = {
   getMicStats: () => tauriInvoke<MicStatsDto>('get_mic_stats'),
   prepareRecordingSession: () => tauriInvoke<string>('prepare_recording_session'),
   startCalibration: () => tauriInvoke<void>('start_calibration'),
+  cancelCalibration: () => tauriInvoke<void>('cancel_calibration'),
   startRecording: () => tauriInvoke<void>('start_recording'),
   stopRecording: () => tauriInvoke<TrackMetadata>('stop_recording'),
   getTracks: () => tauriInvoke<TrackMetadata[]>('get_tracks'),

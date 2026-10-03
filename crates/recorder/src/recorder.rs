@@ -1,10 +1,10 @@
 //! Audio capture, ring buffer streaming, and WAV recording engine.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig, SupportedStreamConfig};
@@ -12,7 +12,7 @@ use hound::{WavSpec, WavWriter};
 use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::HeapRb;
 
-use crate::device::DeviceManager;
+use crate::device::{find_best_input_config, DeviceManager};
 use crate::error::RecorderError;
 use crate::meter::AudioMeter;
 use audio_core::pcm::{i16_to_f32, i32_to_f32, interleaved_to_mono};
@@ -48,7 +48,7 @@ pub struct AudioRecorder {
     meter: Arc<AudioMeter>,
     is_capturing: Arc<AtomicBool>,
     mode: Arc<Mutex<RecorderMode>>,
-    output_dir: PathBuf,
+    output_dir: Arc<Mutex<PathBuf>>,
     writer_handle: Option<JoinHandle<()>>,
     recorded_seconds: Arc<Mutex<f32>>,
     calibration_progress: Arc<Mutex<f32>>,
@@ -58,6 +58,7 @@ pub struct AudioRecorder {
     is_saving: Arc<AtomicBool>,
     finalized_count: Arc<std::sync::atomic::AtomicUsize>,
     last_stream_error: Arc<Mutex<Option<String>>>,
+    last_capture_time_ms: Arc<AtomicU64>,
 }
 
 impl AudioRecorder {
@@ -87,7 +88,7 @@ impl AudioRecorder {
             meter: AudioMeter::new(),
             is_capturing: Arc::new(AtomicBool::new(false)),
             mode: Arc::new(Mutex::new(RecorderMode::Idle)),
-            output_dir: dir,
+            output_dir: Arc::new(Mutex::new(dir)),
             writer_handle: None,
             recorded_seconds: Arc::new(Mutex::new(0.0)),
             calibration_progress: Arc::new(Mutex::new(0.0)),
@@ -97,6 +98,7 @@ impl AudioRecorder {
             is_saving: Arc::new(AtomicBool::new(false)),
             finalized_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             last_stream_error: Arc::new(Mutex::new(None)),
+            last_capture_time_ms: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -108,10 +110,58 @@ impl AudioRecorder {
         self.selected_device_idx
     }
 
+    pub fn output_dir(&self) -> PathBuf {
+        self.output_dir.lock().unwrap().clone()
+    }
+
+    pub fn set_output_dir<P: AsRef<Path>>(&self, dir: P) {
+        let p = dir.as_ref().to_path_buf();
+        let _ = std::fs::create_dir_all(&p);
+        *self.output_dir.lock().unwrap() = p;
+    }
+
+    pub fn is_stream_active(&self) -> bool {
+        if self.stream.is_none() || !self.is_capturing.load(Ordering::SeqCst) {
+            return false;
+        }
+        let last = self.last_capture_time_ms.load(Ordering::Relaxed);
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        if last == 0 || now_ms < last {
+            return true;
+        }
+        // If stream hasn't received audio in over 750ms, it was disconnected/stalled
+        now_ms - last < 750
+    }
+
+    /// Automatically reconnect/reinitialize the hardware stream if it disconnected
+    pub fn ensure_active_stream(&mut self) -> Result<(), RecorderError> {
+        if self.is_stream_active() {
+            return Ok(());
+        }
+        log::info!("Audio capture stream is inactive or disconnected, re-initializing...");
+        if let Some(idx) = self.selected_device_idx {
+            self.select_device(idx)
+        } else {
+            self.select_default_device()
+        }
+    }
+
     /// Select default device, prioritizing Wired External > Bluetooth > Internal.
     pub fn select_default_device(&mut self) -> Result<(), RecorderError> {
         self.stop_stream();
         *self.last_stream_error.lock().unwrap() = None;
+
+        #[cfg(target_os = "android")]
+        {
+            let _ = DeviceManager::select_android_default_device();
+            let android_devs = DeviceManager::get_android_devices();
+            if let Some(top) = android_devs.first() {
+                self.selected_device_idx = Some(top.id as usize);
+            }
+        }
 
         let pw_sources = DeviceManager::get_pipewire_sources();
         if !pw_sources.is_empty() {
@@ -126,7 +176,7 @@ impl AudioRecorder {
             .device_manager
             .default_input_device()
             .ok_or(RecorderError::NoSupportedConfig)?;
-        let default_config = device.default_input_config()?;
+        let best_config = find_best_input_config(&device)?;
 
         if self.selected_device_idx.is_none() {
             if let Ok(devices) = self.device_manager.list_input_devices() {
@@ -139,7 +189,7 @@ impl AudioRecorder {
             }
         }
 
-        self.start_capture_stream(&device, default_config)?;
+        self.start_capture_stream(&device, best_config)?;
         Ok(())
     }
 
@@ -153,25 +203,40 @@ impl AudioRecorder {
         self.stop_stream();
         *self.last_stream_error.lock().unwrap() = None;
 
-        let pw_sources = DeviceManager::get_pipewire_sources();
-        if !pw_sources.is_empty() {
-            self.device_manager.select_pipewire_source(index)?;
+        #[cfg(target_os = "android")]
+        {
+            let _ = DeviceManager::select_android_device(index as i32);
+            self.selected_device_idx = Some(index);
             let device = self
                 .device_manager
                 .default_input_device()
                 .ok_or(RecorderError::NoSupportedConfig)?;
-            let default_config = device.default_input_config()?;
-            self.selected_device_idx = Some(index);
-            self.start_capture_stream(&device, default_config)?;
+            let best_config = find_best_input_config(&device)?;
+            self.start_capture_stream(&device, best_config)?;
             return Ok(());
         }
 
-        let device = self.device_manager.get_input_device(index)?;
-        let default_config = device.default_input_config()?;
-        self.selected_device_idx = Some(index);
-        self.start_capture_stream(&device, default_config)?;
+        #[cfg(not(target_os = "android"))]
+        {
+            let pw_sources = DeviceManager::get_pipewire_sources();
+            if !pw_sources.is_empty() {
+                self.device_manager.select_pipewire_source(index)?;
+                let device = self
+                    .device_manager
+                    .default_input_device()
+                    .ok_or(RecorderError::NoSupportedConfig)?;
+                let best_config = find_best_input_config(&device)?;
+                self.selected_device_idx = Some(index);
+                self.start_capture_stream(&device, best_config)?;
+                return Ok(());
+            }
 
-        Ok(())
+            let device = self.device_manager.get_input_device(index)?;
+            let best_config = find_best_input_config(&device)?;
+            self.selected_device_idx = Some(index);
+            self.start_capture_stream(&device, best_config)?;
+            Ok(())
+        }
     }
 
     /// Check if the currently selected input device is muted in system settings.
@@ -206,8 +271,10 @@ impl AudioRecorder {
         }
     }
 
-    /// Start 2-second ambient noise calibration.
+    /// Start 3-second ambient noise calibration.
     pub fn start_calibration(&self) {
+        #[cfg(target_os = "android")]
+        DeviceManager::notify_android_recording_started();
         *self.mode.lock().unwrap() = RecorderMode::Calibrating;
         *self.calibration_progress.lock().unwrap() = 0.0;
     }
@@ -218,11 +285,15 @@ impl AudioRecorder {
         if *m == RecorderMode::Calibrating {
             *m = RecorderMode::Idle;
             *self.calibration_progress.lock().unwrap() = 0.0;
+            #[cfg(target_os = "android")]
+            DeviceManager::notify_android_recording_stopped();
         }
     }
 
     /// Start recording voice/singing.
     pub fn start_recording(&self) {
+        #[cfg(target_os = "android")]
+        DeviceManager::notify_android_recording_started();
         *self.mode.lock().unwrap() = RecorderMode::Recording;
         *self.recorded_seconds.lock().unwrap() = 0.0;
     }
@@ -230,6 +301,8 @@ impl AudioRecorder {
     /// Stop recording or calibration.
     pub fn stop_recording_or_calibration(&self) {
         *self.mode.lock().unwrap() = RecorderMode::Idle;
+        #[cfg(target_os = "android")]
+        DeviceManager::notify_android_recording_stopped();
     }
 
     /// Get current status for GUI rendering.
@@ -288,7 +361,7 @@ impl AudioRecorder {
         *self.last_calibration_path.lock().unwrap() = Some(path.into());
     }
 
-    fn stop_stream(&mut self) {
+    pub fn stop_stream(&mut self) {
         self.is_capturing.store(false, Ordering::SeqCst);
         self.stream = None;
         if let Some(h) = self.writer_handle.take() {
@@ -311,6 +384,11 @@ impl AudioRecorder {
         let (mut producer, mut consumer) = ring_buffer.split();
 
         self.is_capturing.store(true, Ordering::SeqCst);
+        let now_init = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        self.last_capture_time_ms.store(now_init, Ordering::SeqCst);
         let is_capturing = self.is_capturing.clone();
         let meter = self.meter.clone();
         let mode = self.mode.clone();
@@ -323,13 +401,14 @@ impl AudioRecorder {
         let dropped_samples = self.dropped_samples.clone();
         let finalized_count = self.finalized_count.clone();
         let last_stream_error = self.last_stream_error.clone();
+        let last_capture_time_ms = self.last_capture_time_ms.clone();
 
         // Writer worker thread drains consumer and writes WAV files
         self.writer_handle = Some(thread::spawn(move || {
             let mut current_writer: Option<WavWriter<std::io::BufWriter<std::fs::File>>> = None;
             let mut active_mode = RecorderMode::Idle;
             let mut samples_in_file = 0usize;
-            let calibration_target_samples = (sample_rate as f32 * 2.0) as usize;
+            let calibration_target_samples = (sample_rate as f32 * 3.0) as usize;
 
             let mut drain_buf = vec![0.0f32; 4096];
             let mut remainder_buf = Vec::<f32>::new();
@@ -400,7 +479,8 @@ impl AudioRecorder {
                         let _ = w.finalize();
                         if active_mode == RecorderMode::Calibrating {
                             // If calibration was canceled before reaching target, discard the partial file
-                            let calib_file = output_dir.join("noise_reference.wav");
+                            let target_dir = output_dir.lock().unwrap().clone();
+                            let calib_file = target_dir.join("noise_reference.wav");
                             if samples_in_file < calibration_target_samples {
                                 let _ = std::fs::remove_file(&calib_file);
                                 if last_calibration_path.lock().unwrap().as_deref() == Some(&calib_file) {
@@ -416,9 +496,11 @@ impl AudioRecorder {
                     active_mode = current_target_mode;
                     samples_in_file = 0;
 
+                    let current_output_dir = output_dir.lock().unwrap().clone();
+
                     match active_mode {
                         RecorderMode::Calibrating => {
-                            let path = output_dir.join("noise_reference.wav");
+                            let path = current_output_dir.join("noise_reference.wav");
                             let spec = WavSpec {
                                 channels: 1,
                                 sample_rate,
@@ -431,7 +513,7 @@ impl AudioRecorder {
                             }
                         }
                         RecorderMode::Recording => {
-                            let path = output_dir.join("original.wav");
+                            let path = current_output_dir.join("original.wav");
                             let spec = WavSpec {
                                 channels: 1,
                                 sample_rate,
@@ -520,18 +602,28 @@ impl AudioRecorder {
         // Audio callback with error capture and overrun tracking
         let stream_err_slot = last_stream_error.clone();
         let cap_flag = self.is_capturing.clone();
+        let err_cap_time = last_capture_time_ms.clone();
         let err_fn = move |err| {
             log::error!("CPAL audio input stream error: {:?}", err);
             *stream_err_slot.lock().unwrap() = Some(format!("{}", err));
             cap_flag.store(false, Ordering::SeqCst);
+            err_cap_time.store(0, Ordering::SeqCst);
         };
 
         let sample_format = supported_config.sample_format();
         let drop_cnt = dropped_samples.clone();
+        let time_f32 = last_capture_time_ms.clone();
+        let time_i16 = last_capture_time_ms.clone();
+        let time_i32 = last_capture_time_ms.clone();
         let stream = match sample_format {
             cpal::SampleFormat::F32 => device.build_input_stream(
                 config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    time_f32.store(now, Ordering::Relaxed);
                     meter.update(data);
                     let pushed = producer.push_slice(data);
                     if pushed < data.len() {
@@ -544,6 +636,11 @@ impl AudioRecorder {
             cpal::SampleFormat::I16 => device.build_input_stream(
                 config,
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    time_i16.store(now, Ordering::Relaxed);
                     let mut scratch = [0.0f32; 1024];
                     for chunk in data.chunks(1024) {
                         for (i, &sample) in chunk.iter().enumerate() {
@@ -562,6 +659,11 @@ impl AudioRecorder {
             cpal::SampleFormat::I32 => device.build_input_stream(
                 config,
                 move |data: &[i32], _: &cpal::InputCallbackInfo| {
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    time_i32.store(now, Ordering::Relaxed);
                     let mut scratch = [0.0f32; 1024];
                     for chunk in data.chunks(1024) {
                         for (i, &sample) in chunk.iter().enumerate() {

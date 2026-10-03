@@ -15,9 +15,7 @@
         label = '2';
       } else if (secondsLeft === 1) {
         label = '1';
-      } else if (secondsLeft === 0) {
-        label = 'Start!';
-      } else {
+      } else if (secondsLeft <= 0) {
         clearInterval(timer);
         onComplete();
       }

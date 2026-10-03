@@ -18,6 +18,7 @@
   let micLevel = 0.0;
   let liveSpectrum: number[] = new Array(128).fill(0);
   let elapsedSecs = 0.0;
+  let recordingStartTime = 0.0;
   let timerInterval: ReturnType<typeof setInterval>;
   let statsPollInterval: ReturnType<typeof setInterval>;
 
@@ -71,16 +72,19 @@
       try {
         const track = await api.stopRecording();
         latestRecording = track;
+        elapsedSecs = track.duration_secs;
       } catch (e) {
         console.error('Error stopping recording:', e);
       }
     } else {
-      // Start 3-second calibration countdown
+      // Prepare session and start 3-second room noise calibration countdown
       try {
         await api.prepareRecordingSession();
+        await api.startCalibration();
       } catch (e) {
-        console.warn('Prepare session error:', e);
+        console.warn('Prepare/calibrate session error:', e);
       }
+      isCalibrating = true;
       isCountingDown = true;
     }
   }
@@ -90,6 +94,7 @@
     isCalibrating = false;
     isRecording = true;
     elapsedSecs = 0.0;
+    recordingStartTime = performance.now();
 
     try {
       await api.startRecording();
@@ -97,15 +102,17 @@
       console.warn('Start recording error:', e);
     }
 
+    if (timerInterval) clearInterval(timerInterval);
     timerInterval = setInterval(() => {
-      elapsedSecs += 0.1;
-    }, 100);
+      elapsedSecs = (performance.now() - recordingStartTime) / 1000;
+    }, 40);
   }
 
   function handleCountdownCancel() {
     isCountingDown = false;
     isCalibrating = false;
     isRecording = false;
+    api.cancelCalibration().catch(() => {});
   }
 
   async function handleLatestPlayToggle(e: MouseEvent) {

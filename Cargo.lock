@@ -4612,9 +4612,13 @@ dependencies = [
  "audio-core",
  "cpal",
  "hound",
+ "jni 0.22.4",
  "log",
+ "ndk-context",
  "realfft",
  "ringbuf",
+ "serde",
+ "serde_json",
  "thiserror 2.0.20",
 ]
 

@@ -74,10 +74,11 @@ pub fn get_devices(state: State<'_, AppState>) -> Result<Vec<DeviceDto>, String>
 
     let dtos = devices
         .into_iter()
-        .map(|(idx, name)| DeviceDto {
+        .enumerate()
+        .map(|(i, (idx, name))| DeviceDto {
             index: idx,
             name,
-            is_default: Some(idx) == current_selected || idx == 0,
+            is_default: current_selected.map_or(i == 0, |cur| cur == idx),
         })
         .collect();
 
@@ -92,7 +93,11 @@ pub fn select_device(state: State<'_, AppState>, index: usize) -> Result<(), Str
 
 #[tauri::command]
 pub fn get_mic_stats(state: State<'_, AppState>) -> Result<MicStatsDto, String> {
-    let rec = state.recorder.lock().map_err(|e| e.to_string())?;
+    let mut rec = state.recorder.lock().map_err(|e| e.to_string())?;
+    // If stream disconnected (e.g. Android route switch to BT/USB), auto-reconnect:
+    if !rec.is_stream_active() {
+        let _ = rec.ensure_active_stream();
+    }
     let s = rec.status();
     let mode_str = match s.mode {
         RecorderMode::Idle => "idle",
@@ -122,13 +127,16 @@ pub fn prepare_recording_session(state: State<'_, AppState>) -> Result<String, S
     fs::create_dir_all(&track_dir).map_err(|e| e.to_string())?;
 
     let mut rec = state.recorder.lock().map_err(|e| e.to_string())?;
-    let prev_idx = rec.selected_device_idx();
-    *rec = recorder::AudioRecorder::new(&track_dir);
-    if let Some(idx) = prev_idx {
-        let _ = rec.select_device(idx);
-    } else {
-        let _ = rec.select_default_device();
+    rec.set_output_dir(&track_dir);
+
+    #[cfg(target_os = "android")]
+    {
+        recorder::DeviceManager::notify_android_recording_started();
+        rec.stop_stream();
+        std::thread::sleep(std::time::Duration::from_millis(150));
     }
+
+    rec.ensure_active_stream().map_err(|e| e.to_string())?;
 
     *state.active_track_id.lock().unwrap() = Some(track_id.clone());
     Ok(track_id)
@@ -142,8 +150,29 @@ pub fn start_calibration(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn cancel_calibration(state: State<'_, AppState>) -> Result<(), String> {
+    #[allow(unused_mut)]
+    let mut rec = state.recorder.lock().map_err(|e| e.to_string())?;
+    rec.cancel_calibration();
+    #[cfg(target_os = "android")]
+    {
+        rec.stop_stream();
+        recorder::DeviceManager::notify_android_recording_stopped();
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn start_recording(state: State<'_, AppState>) -> Result<(), String> {
-    let rec = state.recorder.lock().map_err(|e| e.to_string())?;
+    #[allow(unused_mut)]
+    let mut rec = state.recorder.lock().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "android")]
+    {
+        recorder::DeviceManager::notify_android_recording_started();
+        if !rec.is_stream_active() {
+            let _ = rec.ensure_active_stream();
+        }
+    }
     rec.start_recording();
     Ok(())
 }
@@ -166,8 +195,14 @@ pub fn stop_recording(state: State<'_, AppState>) -> Result<TrackMetadata, Strin
     let track_dir = state.track_manager.get_track_dir(&track_id);
 
     {
-        let rec = state.recorder.lock().map_err(|e| e.to_string())?;
+        #[allow(unused_mut)]
+        let mut rec = state.recorder.lock().map_err(|e| e.to_string())?;
         rec.stop_recording_or_calibration();
+        #[cfg(target_os = "android")]
+        {
+            rec.stop_stream();
+            recorder::DeviceManager::notify_android_recording_stopped();
+        }
     }
 
     // Give writer a moment to finalize WAV safely
@@ -190,6 +225,23 @@ pub fn stop_recording(state: State<'_, AppState>) -> Result<TrackMetadata, Strin
                 duration_secs = samples.len() as f32 / spec.sample_rate as f32;
             }
             raw_wave = compute_waveform_peaks(&samples, 120);
+
+            if spec.sample_rate != 48000 && spec.sample_rate > 0 {
+                if let Ok(resampled) = audio_core::resample_mono(&samples, spec.sample_rate, 48000) {
+                    let _ = audio_core::write_wav_f32(&orig_file, &resampled, 48000, 1);
+                }
+            }
+        }
+    }
+
+    let calib_file = track_dir.join("noise_reference.wav");
+    if calib_file.exists() {
+        if let Ok((samples, spec)) = audio_core::read_wav_canonical_f32(&calib_file) {
+            if spec.sample_rate != 48000 && spec.sample_rate > 0 {
+                if let Ok(resampled) = audio_core::resample_mono(&samples, spec.sample_rate, 48000) {
+                    let _ = audio_core::write_wav_f32(&calib_file, &resampled, 48000, 1);
+                }
+            }
         }
     }
 
@@ -226,11 +278,9 @@ pub fn stop_recording(state: State<'_, AppState>) -> Result<TrackMetadata, Strin
         let calib_path = tdir.join("noise_reference.wav");
         let clean_path = tdir.join("cleaned.wav");
 
-        if let Ok((orig_samples, _)) = audio_core::read_wav_canonical_f32(&orig_path) {
+        if let Ok(orig_samples) = audio_core::load_audio_canonical_48k(&orig_path) {
             let calib_samples = if calib_path.exists() {
-                audio_core::read_wav_canonical_f32(&calib_path)
-                    .ok()
-                    .map(|(s, _)| s)
+                audio_core::load_audio_canonical_48k(&calib_path).ok()
             } else {
                 None
             };
@@ -402,13 +452,11 @@ pub fn process_track(
         return Err("Original recording not found".to_string());
     }
 
-    let (orig_samples, _) =
-        audio_core::read_wav_canonical_f32(&orig_path).map_err(|e| e.to_string())?;
+    let orig_samples =
+        audio_core::load_audio_canonical_48k(&orig_path).map_err(|e| e.to_string())?;
 
     let calib_samples = if calib_path.exists() {
-        audio_core::read_wav_canonical_f32(&calib_path)
-            .ok()
-            .map(|(s, _)| s)
+        audio_core::load_audio_canonical_48k(&calib_path).ok()
     } else {
         None
     };

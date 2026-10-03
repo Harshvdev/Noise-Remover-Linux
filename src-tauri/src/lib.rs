@@ -76,6 +76,7 @@ pub fn run() {
             commands::get_mic_stats,
             commands::prepare_recording_session,
             commands::start_calibration,
+            commands::cancel_calibration,
             commands::start_recording,
             commands::stop_recording,
             commands::get_tracks,

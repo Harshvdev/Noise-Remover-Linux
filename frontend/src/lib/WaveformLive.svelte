@@ -95,6 +95,13 @@
   }
 
   async function initMicrophone() {
+    // In Tauri (desktop and Android), CPAL directly captures hardware audio
+    // and feeds real-time spectrum & level data. Calling getUserMedia in WebView
+    // contends with native AAudio HAL and blocks initial audio capture on Android.
+    if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+      return;
+    }
+
     try {
       const AudioContextClass =
         window.AudioContext ||
@@ -105,7 +112,7 @@
       computeBands(audioCtx.sampleRate || 48000);
 
       // Request raw live microphone input
-      const stream = await navigator.mediaDevices.getUserMedia({
+      const stream = await navigator.mediaDevices?.getUserMedia({
         audio: {
           echoCancellation: false,
           noiseSuppression: false,
