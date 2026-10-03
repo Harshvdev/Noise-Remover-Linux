@@ -13,8 +13,12 @@
   ];
   let selectedIdx = 0;
   let isImporting = false;
+  let isMobile = false;
 
   onMount(async () => {
+    if (typeof navigator !== 'undefined') {
+      isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+    }
     try {
       const list = await api.getDevices();
       if (list && list.length > 0) {
@@ -56,6 +60,8 @@
     }
   }
 </script>
+
+<svelte:window onkeydown={(e) => { if (e.key === 'Escape') onClose(); }} />
 
 <div class="drawer-backdrop" onclick={onClose} role="presentation">
   <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -168,7 +174,7 @@
           </div>
           <div class="spec-card">
             <span class="spec-title">Subsystem</span>
-            <span class="spec-value">PipeWire / CPAL</span>
+            <span class="spec-value">{isMobile ? 'System Audio (AAudio / Oboe)' : 'PipeWire / CPAL'}</span>
           </div>
           <div class="spec-card">
             <span class="spec-title">Denoise Model</span>
@@ -182,7 +188,7 @@
         <div class="section-label">Import Audio File</div>
         <label class="import-dropzone">
           <Upload size={24} color="var(--accent-lime)" />
-          <span class="dropzone-text">Click or drag & drop audio file to clean</span>
+          <span class="dropzone-text">{isMobile ? 'Tap to choose audio file to clean' : 'Click or drag & drop audio file to clean'}</span>
           <span class="dropzone-sub">WAV, FLAC, MP3, OGG supported</span>
           <input
             type="file"
@@ -217,7 +223,10 @@
     box-shadow: var(--shadow-floating);
     display: flex;
     flex-direction: column;
-    padding: clamp(16px, 3vh, 28px) clamp(16px, 3vw, 24px);
+    padding-top: max(clamp(16px, 3vh, 28px), calc(var(--safe-top, 0px) + 12px));
+    padding-bottom: max(clamp(16px, 3vh, 28px), calc(var(--safe-bottom, 0px) + 16px));
+    padding-left: max(clamp(16px, 3vw, 24px), calc(var(--safe-left, 0px) + 16px));
+    padding-right: max(clamp(16px, 3vw, 24px), calc(var(--safe-right, 0px) + 16px));
     box-sizing: border-box;
     animation: slideIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
     color: var(--text-main);

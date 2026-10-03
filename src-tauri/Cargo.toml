@@ -23,5 +23,4 @@ playback = { path = "../crates/playback" }
 dsp = { path = "../crates/dsp" }
 denoiser = { path = "../crates/denoiser" }
 hound = "3.5"
-rfd = "0.15"
 cpal = "0.18"

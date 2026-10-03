@@ -23,6 +23,8 @@
   let isScrubbing = false;
   let pendingSeekExpires = 0;
 
+  let isDesktop = true;
+
   async function loadTracks() {
     try {
       tracks = await api.getTracks();
@@ -51,6 +53,9 @@
   }
 
   onMount(() => {
+    if (typeof navigator !== 'undefined') {
+      isDesktop = !/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+    }
     loadTracks();
     lastFrameTime = performance.now();
     animFrameId = requestAnimationFrame(updatePlayhead);
@@ -167,9 +172,9 @@
       <span>Back</span>
     </button>
 
-    <button class="btn-nav" onclick={onOpenSettings}>
+    <button class="btn-nav btn-settings" onclick={onOpenSettings} aria-label="Settings">
       <Settings size={18} color="var(--text-main)" />
-      <span>Settings</span>
+      {#if isDesktop}<span>Settings</span>{/if}
     </button>
   </header>
 
@@ -187,7 +192,7 @@
         class:active-tab={filter === 'all'}
         onclick={() => (filter = 'all')}
       >
-        <LayoutGrid size={15} color={filter === 'all' ? 'var(--text-on-accent)' : 'var(--text-muted)'} />
+        <LayoutGrid size={15} color={filter === 'all' ? 'var(--text-on-accent)' : 'var(--text-secondary)'} />
         <span>All</span>
       </button>
 
@@ -199,7 +204,7 @@
         <Star
           size={15}
           fill={filter === 'favorites' ? 'var(--text-on-accent)' : 'none'}
-          color={filter === 'favorites' ? 'var(--text-on-accent)' : 'var(--text-muted)'}
+          color={filter === 'favorites' ? 'var(--text-on-accent)' : 'var(--text-secondary)'}
           strokeWidth={1.8}
         />
         <span>Favorites</span>
@@ -213,9 +218,9 @@
         onclick={() => (dateSortDesc = !dateSortDesc)}
         title="Sort by date"
       >
-        <Calendar size={15} />
+        <Calendar size={15} color="currentColor" />
         <span>Date</span>
-        <ChevronDown size={14} style="transform: rotate({dateSortDesc ? 0 : 180}deg); transition: transform 0.2s ease;" />
+        <ChevronDown size={14} color="currentColor" style="transform: rotate({dateSortDesc ? 0 : 180}deg); transition: transform 0.2s ease;" />
       </button>
     </div>
   </div>
@@ -252,17 +257,21 @@
     height: 100%;
     display: flex;
     flex-direction: column;
-    padding: 24px 36px;
+    padding: max(clamp(14px, 2.5vh, 24px), calc(var(--safe-top, 0px) + 8px)) clamp(16px, 3.5vw, 36px) max(clamp(14px, 2.5vh, 24px), calc(var(--safe-bottom, 0px) + 12px));
     background-color: var(--bg-app);
     overflow: hidden;
+    box-sizing: border-box;
+    overscroll-behavior: none;
+    touch-action: manipulation;
   }
 
   .recordings-topbar {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 22px;
+    margin-bottom: clamp(10px, 1.8vh, 20px);
     width: 100%;
+    flex-shrink: 0;
   }
 
   /* Squircle nav buttons matching panel-2.png */
@@ -273,13 +282,14 @@
     background: var(--bg-card);
     border: 1px solid var(--border-subtle);
     color: var(--text-main);
-    padding: 9px 18px;
+    padding: 8px 16px;
     border-radius: 14px;
     font-size: 13.5px;
     font-weight: 500;
     cursor: pointer;
     box-shadow: var(--shadow-card);
     transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+    flex-shrink: 0;
   }
 
   .btn-nav:hover {
@@ -296,27 +306,29 @@
     display: flex;
     align-items: flex-end;
     justify-content: space-between;
-    margin-bottom: 22px;
+    margin-bottom: clamp(10px, 1.8vh, 20px);
     width: 100%;
-    gap: 16px;
+    gap: 12px;
+    flex-shrink: 0;
   }
 
   .title-group {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
   }
 
   .page-title {
     font-family: var(--font-brand);
-    font-size: 32px;
+    font-size: clamp(22px, 3.5vw, 32px);
     font-weight: 700;
     color: var(--text-main);
     letter-spacing: -0.5px;
+    line-height: 1.1;
   }
 
   .page-subtitle {
-    font-size: 14px;
+    font-size: 13px;
     color: var(--text-muted);
   }
 
@@ -329,6 +341,7 @@
     box-shadow: var(--shadow-card);
     padding: 4px 6px;
     border-radius: 14px;
+    flex-shrink: 0;
   }
 
   .filter-tab {
@@ -337,8 +350,8 @@
     gap: 7px;
     background: transparent;
     border: none;
-    color: var(--text-muted);
-    padding: 7px 16px;
+    color: var(--text-secondary);
+    padding: 6px 14px;
     border-radius: 10px;
     font-size: 13px;
     font-weight: 500;
@@ -370,16 +383,18 @@
 
   .tracks-scroll-area {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
     padding-right: 4px;
+    overscroll-behavior: contain;
   }
 
   .tracks-list {
     display: flex;
     flex-direction: column;
     gap: 10px;
-    padding-bottom: 20px;
+    padding-bottom: max(24px, calc(var(--safe-bottom, 0px) + 24px));
   }
 
   .empty-state {
@@ -391,14 +406,49 @@
     font-size: 15px;
   }
 
-  @media (max-width: 780px) {
+  @media (max-width: 680px), (orientation: portrait) {
     .panel-recordings {
-      padding: 18px 20px;
+      padding-top: max(clamp(52px, 7vh, 68px), calc(var(--safe-top, 0px) + 14px));
+      padding-bottom: max(clamp(28px, 4.5vh, 42px), calc(var(--safe-bottom, 0px) + 20px));
+      padding-left: max(18px, calc(var(--safe-left, 0px) + 16px));
+      padding-right: max(18px, calc(var(--safe-right, 0px) + 16px));
     }
     .header-action-row {
       flex-direction: column;
       align-items: flex-start;
-      gap: 12px;
+      gap: 10px;
+    }
+    .filter-controls {
+      width: 100%;
+      justify-content: space-between;
+    }
+    .filter-tab {
+      flex: 1;
+      justify-content: center;
+      padding: 6px 8px;
+      font-size: 12px;
+    }
+    .btn-settings {
+      padding: 8px 10px;
+      border-radius: 12px;
+    }
+  }
+
+  @media (orientation: landscape) and (max-height: 520px) {
+    .panel-recordings {
+      padding: 8px 18px;
+    }
+    .recordings-topbar {
+      margin-bottom: 6px;
+    }
+    .header-action-row {
+      margin-bottom: 6px;
+    }
+    .page-title {
+      font-size: 18px;
+    }
+    .page-subtitle {
+      display: none;
     }
   }
 </style>

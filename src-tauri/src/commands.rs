@@ -9,7 +9,9 @@ use denoiser::{AutoPipeline, AutoPipelineConfig, NeuralModel};
 use dsp::NoiseAnalyzer;
 use recorder::RecorderMode;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
+#[cfg(desktop)]
+use tauri::Manager;
+use tauri::{AppHandle, State};
 
 use crate::state::AppState;
 use crate::tracks::TrackMetadata;
@@ -412,6 +414,12 @@ pub fn process_track(
     };
 
     let model = if settings.model_id == "deepfilter_net3" {
+        #[cfg(target_os = "android")]
+        {
+            log::warn!("DeepFilterNet3 is not supported on Android, falling back to Dpdfnet2_48k");
+            NeuralModel::Dpdfnet2_48k
+        }
+        #[cfg(not(target_os = "android"))]
         NeuralModel::DeepFilterNet3
     } else {
         NeuralModel::Dpdfnet2_48k
@@ -553,21 +561,38 @@ pub fn import_audio_file(
 #[tauri::command]
 pub fn open_folder(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let track_dir = state.track_manager.get_track_dir(&id);
-    let _ = std::process::Command::new("xdg-open")
-        .arg(&track_dir)
-        .spawn();
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("xdg-open")
+            .arg(&track_dir)
+            .spawn();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("explorer")
+            .arg(&track_dir)
+            .spawn();
+    }
+    #[cfg(target_os = "android")]
+    {
+        log::info!("open_folder requested on Android for track {}: {:?}", id, track_dir);
+    }
     Ok(())
 }
 
 #[tauri::command]
 pub fn window_minimize(app: AppHandle) {
+    #[cfg(desktop)]
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.minimize();
     }
+    #[cfg(not(desktop))]
+    let _ = app;
 }
 
 #[tauri::command]
 pub fn window_maximize(app: AppHandle) {
+    #[cfg(desktop)]
     if let Some(win) = app.get_webview_window("main") {
         if let Ok(is_max) = win.is_maximized() {
             if is_max {
@@ -577,11 +602,16 @@ pub fn window_maximize(app: AppHandle) {
             }
         }
     }
+    #[cfg(not(desktop))]
+    let _ = app;
 }
 
 #[tauri::command]
 pub fn window_close(app: AppHandle) {
+    #[cfg(desktop)]
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.close();
     }
+    #[cfg(not(desktop))]
+    let _ = app;
 }

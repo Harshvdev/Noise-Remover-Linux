@@ -7,6 +7,7 @@ mod waveform_helper;
 
 use state::AppState;
 use std::path::PathBuf;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -15,17 +16,9 @@ pub fn run() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 
-    let recordings_dir = if PathBuf::from("../recordings").exists() {
-        std::fs::canonicalize(PathBuf::from("../recordings"))
-            .unwrap_or_else(|_| PathBuf::from("../recordings"))
-    } else {
-        std::fs::canonicalize(PathBuf::from("recordings"))
-            .unwrap_or_else(|_| PathBuf::from("recordings"))
-    };
-
     tauri::Builder::default()
         .setup(|app| {
-            use tauri::Manager;
+            #[cfg(desktop)]
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.unmaximize();
                 let _ = win.set_size(tauri::Size::Logical(tauri::LogicalSize {
@@ -34,9 +27,49 @@ pub fn run() {
                 }));
                 let _ = win.center();
             }
+
+            // Cross-platform recordings directory resolution
+            let recordings_dir = if cfg!(target_os = "android") {
+                app.path()
+                    .app_data_dir()
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join("recordings")
+            } else if PathBuf::from("../recordings").exists() {
+                std::fs::canonicalize(PathBuf::from("../recordings"))
+                    .unwrap_or_else(|_| PathBuf::from("../recordings"))
+            } else if PathBuf::from("recordings").exists() {
+                std::fs::canonicalize(PathBuf::from("recordings"))
+                    .unwrap_or_else(|_| PathBuf::from("recordings"))
+            } else {
+                app.path()
+                    .app_data_dir()
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join("recordings")
+            };
+
+            if let Err(e) = std::fs::create_dir_all(&recordings_dir) {
+                log::warn!("Could not create recordings directory {:?}: {}", recordings_dir, e);
+            }
+
+            // Register neural model location if available in app data or bundled resources
+            if let Ok(data_dir) = app.path().app_data_dir() {
+                let extracted_model = data_dir.join("models").join("dpdfnet2_48khz_hr.onnx");
+                if extracted_model.exists() {
+                    std::env::set_var("VOICE_CLEANER_MODEL_PATH", &extracted_model);
+                }
+            }
+            if std::env::var("VOICE_CLEANER_MODEL_PATH").is_err() {
+                if let Ok(res_dir) = app.path().resource_dir() {
+                    let bundled_model = res_dir.join("models").join("dpdfnet2_48khz_hr.onnx");
+                    if bundled_model.exists() {
+                        std::env::set_var("VOICE_CLEANER_MODEL_PATH", bundled_model);
+                    }
+                }
+            }
+
+            app.manage(AppState::new(recordings_dir));
             Ok(())
         })
-        .manage(AppState::new(recordings_dir))
         .invoke_handler(tauri::generate_handler![
             commands::get_devices,
             commands::select_device,
