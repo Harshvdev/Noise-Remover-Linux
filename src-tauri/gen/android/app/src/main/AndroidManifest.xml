@@ -16,9 +16,10 @@
         android:theme="@style/Theme.voice_cleaner"
         android:usesCleartextTraffic="${usesCleartextTraffic}">
         <activity
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|uiMode|locale|layoutDirection|fontScale|density|navigation"
             android:screenOrientation="unspecified"
             android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
             android:label="@string/main_activity_title"
             android:name=".MainActivity"
             android:exported="true">

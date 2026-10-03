@@ -613,6 +613,9 @@
     pointer-events: none;
     user-select: none;
     -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent !important;
+    -webkit-touch-callout: none !important;
+    outline: none !important;
     transition: opacity 0.24s cubic-bezier(0.16, 1, 0.3, 1),
       transform 0.24s cubic-bezier(0.16, 1, 0.3, 1),
       background-color 0.15s ease;

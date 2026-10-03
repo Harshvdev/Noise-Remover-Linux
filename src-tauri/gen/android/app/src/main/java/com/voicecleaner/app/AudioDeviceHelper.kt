@@ -35,6 +35,30 @@ object AudioDeviceHelper {
         val isSelected: Boolean
     )
 
+    private var isCallbackRegistered = false
+    private val deviceCallback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+            Log.i(TAG, "Audio devices added, re-evaluating priority routing")
+            if (manualSelectedDeviceId == null) {
+                selectDefaultDevice()
+            }
+        }
+
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
+            Log.i(TAG, "Audio devices removed, re-evaluating priority routing")
+            val selectedId = manualSelectedDeviceId
+            if (selectedId != null) {
+                val currentInputs = audioManager?.getDevices(AudioManager.GET_DEVICES_INPUTS) ?: emptyArray()
+                if (currentInputs.none { it.id == selectedId }) {
+                    manualSelectedDeviceId = null
+                }
+            }
+            if (manualSelectedDeviceId == null) {
+                selectDefaultDevice()
+            }
+        }
+    }
+
     private var activityRef: java.lang.ref.WeakReference<Activity>? = null
 
     fun init(activity: Activity) {
@@ -50,29 +74,11 @@ object AudioDeviceHelper {
         // Always keep media volume as the controlled stream
         activity.volumeControlStream = AudioManager.STREAM_MUSIC
 
-        // Register dynamic plug/unplug callback
-        audioManager?.registerAudioDeviceCallback(object : AudioDeviceCallback() {
-            override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
-                Log.i(TAG, "Audio devices added, re-evaluating priority routing")
-                if (manualSelectedDeviceId == null) {
-                    selectDefaultDevice()
-                }
-            }
-
-            override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
-                Log.i(TAG, "Audio devices removed, re-evaluating priority routing")
-                val selectedId = manualSelectedDeviceId
-                if (selectedId != null) {
-                    val currentInputs = audioManager?.getDevices(AudioManager.GET_DEVICES_INPUTS) ?: emptyArray()
-                    if (currentInputs.none { it.id == selectedId }) {
-                        manualSelectedDeviceId = null
-                    }
-                }
-                if (manualSelectedDeviceId == null) {
-                    selectDefaultDevice()
-                }
-            }
-        }, Handler(Looper.getMainLooper()))
+        // Register dynamic plug/unplug callback once
+        if (!isCallbackRegistered) {
+            audioManager?.registerAudioDeviceCallback(deviceCallback, Handler(Looper.getMainLooper()))
+            isCallbackRegistered = true
+        }
 
         // Set default routing target without forcing MODE_IN_COMMUNICATION during idle
         selectDefaultDevice()

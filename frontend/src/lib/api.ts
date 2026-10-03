@@ -216,6 +216,11 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'seek_track':
       if (args?.sec !== undefined) mockPlayback.position_seconds = args.sec as number;
       return undefined as T;
+    case 'set_playback_clean':
+      if (args?.clean !== undefined) mockPlayback.is_clean = args.clean as boolean;
+      return undefined as T;
+    case 'share_track':
+      return undefined as T;
     case 'get_playback_status':
       return mockPlayback as T;
     case 'get_diagnostics':
@@ -279,6 +284,7 @@ export const api = {
   pauseTrack: () => tauriInvoke<void>('pause_track'),
   resumeTrack: () => tauriInvoke<void>('resume_track'),
   seekTrack: (sec: number) => tauriInvoke<void>('seek_track', { sec }),
+  setPlaybackClean: (clean: boolean) => tauriInvoke<void>('set_playback_clean', { clean }),
   getPlaybackStatus: () => tauriInvoke<PlaybackStatusDto>('get_playback_status'),
   processTrack: (id: string, settings: AdvancedSettingsDto) =>
     tauriInvoke<TrackMetadata>('process_track', { id, settings }),
@@ -286,6 +292,7 @@ export const api = {
   importAudioFile: (filePath: string) =>
     tauriInvoke<TrackMetadata>('import_audio_file', { filePath }),
   openFolder: (id: string) => tauriInvoke<void>('open_folder', { id }),
+  shareTrack: (id: string) => tauriInvoke<void>('share_track', { id }),
   windowMinimize: () => tauriInvoke<void>('window_minimize'),
   windowMaximize: () => tauriInvoke<void>('window_maximize'),
   windowClose: () => tauriInvoke<void>('window_close'),

@@ -81,6 +81,11 @@
     animFrameId = requestAnimationFrame(updatePlayhead);
   }
 
+  function focusInput(node: HTMLInputElement) {
+    node.focus();
+    node.select();
+  }
+
   onMount(() => {
     loadTrackData();
     lastFrameTime = performance.now();
@@ -93,7 +98,7 @@
         if (isDragging) return;
         if (status.track_id === trackId) {
           isPlaying = status.is_playing;
-          if (pendingEnhanceExpires <= Date.now()) {
+          if (status.is_playing && pendingEnhanceExpires <= Date.now()) {
             isCleanAudio = status.is_clean;
           }
 
@@ -129,6 +134,29 @@
         // Ignore fallback
       }
     }, 50);
+
+    const handleBackEvent = (e: Event) => {
+      if (showAdvancedSettings) {
+        showAdvancedSettings = false;
+        e.preventDefault();
+        return;
+      }
+      if (showMoreMenu) {
+        showMoreMenu = false;
+        e.preventDefault();
+        return;
+      }
+      if (isRenaming) {
+        handleCancelRename();
+        e.preventDefault();
+        return;
+      }
+    };
+    window.addEventListener('app-back-press', handleBackEvent);
+
+    return () => {
+      window.removeEventListener('app-back-press', handleBackEvent);
+    };
   });
 
   onDestroy(() => {
@@ -142,6 +170,9 @@
       await api.pauseTrack();
       isPlaying = false;
     } else {
+      if (track.duration_secs > 0 && currentPosSecs >= track.duration_secs - 0.1) {
+        currentPosSecs = 0.0;
+      }
       lastFrameTime = performance.now();
       await api.playTrack(track.id, isCleanAudio, currentPosSecs);
       isPlaying = true;
@@ -193,13 +224,20 @@
   // Seamless real-time A/B audio toggle
   async function handleEnhanceToggle() {
     isCleanAudio = !isCleanAudio;
-    pendingEnhanceExpires = Date.now() + 1000;
-    if (track && isPlaying) {
-      try {
-        await api.playTrack(track.id, isCleanAudio, currentPosSecs);
-      } catch (e) {
-        console.warn('Enhance switch error:', e);
-      }
+    pendingEnhanceExpires = Date.now() + 2000;
+    try {
+      await api.setPlaybackClean(isCleanAudio);
+    } catch (e) {
+      console.warn('Enhance switch error:', e);
+    }
+  }
+
+  async function handleShareTrack() {
+    if (!track) return;
+    try {
+      await api.shareTrack(track.id);
+    } catch (e) {
+      console.error('Share error:', e);
     }
   }
 
@@ -299,6 +337,7 @@
           <input
             type="text"
             class="rename-input"
+            use:focusInput
             bind:value={renameValue}
             onkeydown={(e) => {
               if (e.key === 'Enter') handleSaveRename();
@@ -403,10 +442,10 @@
         <!-- 4. Share Card -->
         <div
           class="action-card share-card"
-          onclick={handleOpenFolder}
+          onclick={handleShareTrack}
           role="button"
           tabindex="0"
-          onkeydown={(e) => e.key === 'Enter' && handleOpenFolder()}
+          onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && handleShareTrack()}
         >
           <div class="card-top-row">
             <Upload size={24} color="var(--text-main)" strokeWidth={1.8} />
@@ -414,8 +453,8 @@
           <div class="card-bottom-info">
             <span class="card-headline">Share</span>
             <span class="card-subheadline">
-              <span class="sub-full">Save / Export</span>
-              <span class="sub-short">Export</span>
+              <span class="sub-full">Audio File</span>
+              <span class="sub-short">Share</span>
             </span>
           </div>
         </div>
@@ -558,7 +597,6 @@
   }
 
   /* Squircle nav buttons */
-  /* Squircle nav buttons */
   .btn-nav {
     display: inline-flex;
     align-items: center;
@@ -573,6 +611,9 @@
     cursor: pointer;
     box-shadow: var(--shadow-card);
     transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+    -webkit-tap-highlight-color: transparent !important;
+    -webkit-touch-callout: none !important;
+    outline: none !important;
   }
 
   .btn-nav:hover {
@@ -640,9 +681,13 @@
     gap: 10px;
     transition: background 0.15s ease;
     font-weight: 500;
+    -webkit-tap-highlight-color: transparent !important;
+    -webkit-touch-callout: none !important;
+    outline: none !important;
   }
 
-  .menu-item:hover {
+  .menu-item:hover,
+  .menu-item:active {
     background: var(--bg-card-hover);
   }
 
@@ -791,6 +836,10 @@
                 border-color 0.2s ease;
     box-sizing: border-box;
     user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent !important;
+    -webkit-touch-callout: none !important;
+    outline: none !important;
     overflow: visible;
   }
 

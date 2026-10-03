@@ -423,6 +423,29 @@ pub fn seek_track(state: State<'_, AppState>, sec: f32) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn set_playback_clean(state: State<'_, AppState>, clean: bool) -> Result<(), String> {
+    *state.current_playing_is_clean.lock().unwrap() = clean;
+    if let Some(id) = state.current_playing_track.lock().unwrap().clone() {
+        let track_dir = state.track_manager.get_track_dir(&id);
+        let target_file = if clean {
+            let cf = track_dir.join("cleaned.wav");
+            if cf.exists() {
+                cf
+            } else {
+                track_dir.join("original.wav")
+            }
+        } else {
+            track_dir.join("original.wav")
+        };
+        if target_file.exists() {
+            let mut player = state.player.lock().map_err(|e| e.to_string())?;
+            let _ = player.load_file_preserve_position(&target_file, true);
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn get_playback_status(state: State<'_, AppState>) -> Result<PlaybackStatusDto, String> {
     let player = state.player.lock().map_err(|e| e.to_string())?;
     let cur_track = state.current_playing_track.lock().unwrap().clone();
@@ -623,8 +646,59 @@ pub fn open_folder(state: State<'_, AppState>, id: String) -> Result<(), String>
     }
     #[cfg(target_os = "android")]
     {
-        log::info!("open_folder requested on Android for track {}: {:?}", id, track_dir);
+        let track = state.track_manager.get_track(&id).ok_or_else(|| "Track not found".to_string())?;
+        let clean_path = track_dir.join("cleaned.wav");
+        let target_file = if clean_path.exists() {
+            clean_path
+        } else {
+            track_dir.join("original.wav")
+        };
+        if target_file.exists() {
+            let file_path = target_file.to_string_lossy().to_string();
+            recorder::DeviceManager::export_android_file(&file_path, &track.title);
+        }
     }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn share_track(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let track = state.track_manager.get_track(&id).ok_or_else(|| "Track not found".to_string())?;
+    let _ = &track;
+    let track_dir = state.track_manager.get_track_dir(&id);
+    let clean_path = track_dir.join("cleaned.wav");
+    let target_file = if clean_path.exists() {
+        clean_path
+    } else {
+        track_dir.join("original.wav")
+    };
+    if !target_file.exists() {
+        return Err("Audio file not found on disk".to_string());
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        let file_path = target_file.to_string_lossy().to_string();
+        let ok = recorder::DeviceManager::share_android_file(&file_path, &track.title);
+        if !ok {
+            return Err("Failed to launch share dialog".to_string());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("xdg-open")
+            .arg(&track_dir)
+            .spawn();
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("explorer")
+            .arg(&track_dir)
+            .spawn();
+    }
+
     Ok(())
 }
 
@@ -660,6 +734,10 @@ pub fn window_close(app: AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.close();
     }
-    #[cfg(not(desktop))]
+    #[cfg(target_os = "android")]
+    {
+        recorder::DeviceManager::exit_android_app();
+    }
+    #[cfg(not(any(desktop, target_os = "android")))]
     let _ = app;
 }

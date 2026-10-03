@@ -393,6 +393,92 @@ impl DeviceManager {
         });
     }
 
+    /// Share a recorded track on Android using native Share Sheet.
+    #[cfg(target_os = "android")]
+    pub fn share_android_file(file_path: &str, title: &str) -> bool {
+        let ctx = ndk_context::android_context();
+        let vm_ptr = ctx.vm();
+        if vm_ptr.is_null() {
+            return false;
+        }
+        let vm = unsafe { jni::JavaVM::from_raw(vm_ptr as *mut _) };
+        let res: Result<(), jni::errors::Error> = vm.attach_current_thread(|env| {
+            let j_path = env.new_string(file_path)?;
+            let j_title = env.new_string(title)?;
+            let val_path = jni::objects::JValue::from(&j_path);
+            let val_title = jni::objects::JValue::from(&j_title);
+            env.call_static_method(
+                jni::jni_str!("com/voicecleaner/app/MainActivity"),
+                jni::jni_str!("shareTrack"),
+                jni::jni_sig!("(Ljava/lang/String;Ljava/lang/String;)V"),
+                &[val_path, val_title],
+            )?;
+            Ok(())
+        });
+        res.is_ok()
+    }
+
+    /// Export a recorded track to Android's public Music/VoiceCleaner directory.
+    #[cfg(target_os = "android")]
+    pub fn export_android_file(file_path: &str, title: &str) -> bool {
+        let ctx = ndk_context::android_context();
+        let vm_ptr = ctx.vm();
+        if vm_ptr.is_null() {
+            return false;
+        }
+        let vm = unsafe { jni::JavaVM::from_raw(vm_ptr as *mut _) };
+        let res: Result<bool, jni::errors::Error> = vm.attach_current_thread(|env| {
+            let j_path = env.new_string(file_path)?;
+            let j_title = env.new_string(title)?;
+            let val_path = jni::objects::JValue::from(&j_path);
+            let val_title = jni::objects::JValue::from(&j_title);
+            let res = env.call_static_method(
+                jni::jni_str!("com/voicecleaner/app/MainActivity"),
+                jni::jni_str!("exportTrack"),
+                jni::jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Z"),
+                &[val_path, val_title],
+            )?;
+            Ok(res.z().unwrap_or(false))
+        });
+        res.unwrap_or(false)
+    }
+
+    /// Move app to back / exit on Android
+    #[cfg(target_os = "android")]
+    pub fn exit_android_app() -> bool {
+        let ctx = ndk_context::android_context();
+        let vm_ptr = ctx.vm();
+        if vm_ptr.is_null() {
+            return false;
+        }
+        let vm = unsafe { jni::JavaVM::from_raw(vm_ptr as *mut _) };
+        let res: Result<(), jni::errors::Error> = vm.attach_current_thread(|env| {
+            env.call_static_method(
+                jni::jni_str!("com/voicecleaner/app/MainActivity"),
+                jni::jni_str!("exitApp"),
+                jni::jni_sig!("()V"),
+                &[],
+            )?;
+            Ok(())
+        });
+        res.is_ok()
+    }
+
+    #[cfg(not(target_os = "android"))]
+    pub fn share_android_file(_file_path: &str, _title: &str) -> bool {
+        false
+    }
+
+    #[cfg(not(target_os = "android"))]
+    pub fn export_android_file(_file_path: &str, _title: &str) -> bool {
+        false
+    }
+
+    #[cfg(not(target_os = "android"))]
+    pub fn exit_android_app() -> bool {
+        false
+    }
+
     /// Query Linux sound server (PipeWire / PulseAudio) for active input sources and hardware ports.
     pub fn get_pipewire_sources() -> Vec<PipeWireSourceInfo> {
         #[cfg(target_os = "linux")]
